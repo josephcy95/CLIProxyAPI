@@ -129,7 +129,8 @@ func TestApplyCodexConfiguredInstructionsPrependsForOAuthMatchingModel(t *testin
 		Content: "private prefs",
 		Models:  []string{"gpt-5*"},
 	}}})
-	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"type": "codex"}, Attributes: map[string]string{
+	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"type": "codex", "allow_private_instructions": true}, Attributes: map[string]string{
+		"allow_private_instructions": "true",
 		"base_url": captureCodexInstructionsServer(t, func(body []byte) {
 			got := gjson.GetBytes(body, "instructions").String()
 			want := "private prefs\n\nbase instructions"
@@ -142,7 +143,10 @@ func TestApplyCodexConfiguredInstructionsPrependsForOAuthMatchingModel(t *testin
 	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
 		Model:   "gpt-5.5",
 		Payload: []byte(`{"model":"gpt-5.5","instructions":"base instructions","input":"hello"}`),
-	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")})
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai-response"),
+		Metadata:     map[string]any{cliproxyexecutor.CodexPrivateInstructionsMetadataKey: true},
+	})
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -190,6 +194,57 @@ func TestApplyCodexConfiguredInstructionsSkipsNonMatchingModel(t *testing.T) {
 		Model:   "gpt-4.1",
 		Payload: []byte(`{"model":"gpt-4.1","instructions":"base instructions","input":"hello"}`),
 	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+}
+
+
+func TestApplyCodexConfiguredInstructionsSkipsWithoutPrivateMarker(t *testing.T) {
+	executor := NewCodexExecutor(&config.Config{Codex: config.CodexConfig{Instructions: config.CodexInstructionsConfig{
+		Enabled: true,
+		Content: "private prefs",
+		Models:  []string{"gpt-5*"},
+	}}})
+	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"type": "codex", "allow_private_instructions": true}, Attributes: map[string]string{
+		"allow_private_instructions": "true",
+		"base_url": captureCodexInstructionsServer(t, func(body []byte) {
+			if got := gjson.GetBytes(body, "instructions").String(); got != "base instructions" {
+				t.Fatalf("instructions = %q, want base instructions", got)
+			}
+		}),
+	}}
+
+	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: []byte(`{"model":"gpt-5.5","instructions":"base instructions","input":"hello"}`),
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+}
+
+func TestApplyCodexConfiguredInstructionsSkipsUnmarkedAuth(t *testing.T) {
+	executor := NewCodexExecutor(&config.Config{Codex: config.CodexConfig{Instructions: config.CodexInstructionsConfig{
+		Enabled: true,
+		Content: "private prefs",
+		Models:  []string{"gpt-5*"},
+	}}})
+	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"type": "codex"}, Attributes: map[string]string{
+		"base_url": captureCodexInstructionsServer(t, func(body []byte) {
+			if got := gjson.GetBytes(body, "instructions").String(); got != "base instructions" {
+				t.Fatalf("instructions = %q, want base instructions", got)
+			}
+		}),
+	}}
+
+	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: []byte(`{"model":"gpt-5.5","instructions":"base instructions","input":"hello"}`),
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai-response"),
+		Metadata:     map[string]any{cliproxyexecutor.CodexPrivateInstructionsMetadataKey: true},
+	})
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}

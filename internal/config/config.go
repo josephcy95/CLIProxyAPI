@@ -285,6 +285,10 @@ type CodexConfig struct {
 
 // CodexInstructionsConfig configures additional instructions injected into the
 // final Codex Responses API instructions field.
+//
+// Injection is opt-in per request via model markers (for example private/gpt-5.6-sol
+// or gpt-5.6-sol-private). When require-auth-allow is true (default), only auth files
+// marked with allow_private_instructions may serve those private requests.
 type CodexInstructionsConfig struct {
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
 	Mode      string   `yaml:"mode" json:"mode"`
@@ -292,6 +296,21 @@ type CodexInstructionsConfig struct {
 	File      string   `yaml:"file" json:"file"`
 	Models    []string `yaml:"models" json:"models"`
 	OAuthOnly *bool    `yaml:"oauth-only,omitempty" json:"oauth-only,omitempty"`
+	// RequireAuthAllow restricts private-instruction requests to auths marked
+	// allow_private_instructions. Defaults to true when omitted.
+	RequireAuthAllow *bool `yaml:"require-auth-allow,omitempty" json:"require-auth-allow,omitempty"`
+	// ReserveMarkedAuths excludes marked auths from normal (non-private) traffic.
+	// Defaults to false so marked accounts still handle ordinary requests.
+	ReserveMarkedAuths bool `yaml:"reserve-marked-auths,omitempty" json:"reserve-marked-auths,omitempty"`
+	// RequestMarkers configures model prefixes/suffixes that enable private mode.
+	// Defaults to prefixes=["private/"] and suffixes=["-private"] when both empty.
+	RequestMarkers CodexInstructionMarkersConfig `yaml:"request-markers,omitempty" json:"request-markers,omitempty"`
+}
+
+// CodexInstructionMarkersConfig configures private-instruction model markers.
+type CodexInstructionMarkersConfig struct {
+	Prefixes []string `yaml:"prefixes,omitempty" json:"prefixes,omitempty"`
+	Suffixes []string `yaml:"suffixes,omitempty" json:"suffixes,omitempty"`
 }
 
 // TLSConfig holds HTTPS server settings.

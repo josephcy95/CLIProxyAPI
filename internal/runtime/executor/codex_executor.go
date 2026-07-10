@@ -16,6 +16,7 @@ import (
 
 	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/codexinstructions"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
@@ -781,7 +782,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = normalizeCodexInstructions(body)
-	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body)
+	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body, opts)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
 	}
@@ -958,7 +959,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = normalizeCodexInstructions(body)
-	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body)
+	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body, opts)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
 	}
@@ -1069,7 +1070,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body = normalizeCodexInstructions(body)
-	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body)
+	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body, opts)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth)
 	}
@@ -1227,7 +1228,7 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body, _ = sjson.SetBytes(body, "stream", false)
 	body = normalizeCodexInstructions(body)
-	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body)
+	body = applyCodexConfiguredInstructions(e.cfg, auth, baseModel, body, opts)
 
 	enc, err := tokenizerForCodexModel(baseModel)
 	if err != nil {
@@ -1717,11 +1718,17 @@ func normalizeCodexInstructions(body []byte) []byte {
 	return body
 }
 
-func applyCodexConfiguredInstructions(cfg *config.Config, auth *cliproxyauth.Auth, model string, body []byte) []byte {
+func applyCodexConfiguredInstructions(cfg *config.Config, auth *cliproxyauth.Auth, model string, body []byte, opts cliproxyexecutor.Options) []byte {
 	if cfg == nil || !cfg.Codex.Instructions.Enabled || len(body) == 0 {
 		return body
 	}
+	if !codexinstructions.RequestIsPrivate(opts.Metadata) {
+		return body
+	}
 	if codexInstructionsOAuthOnly(cfg.Codex.Instructions) && !codexInstructionsAuthIsOAuth(auth) {
+		return body
+	}
+	if codexInstructionsRequireAuthAllow(cfg.Codex.Instructions) && !codexinstructions.AuthAllows(auth.Attributes, auth.Metadata) {
 		return body
 	}
 	if !codexInstructionsModelMatches(cfg.Codex.Instructions.Models, model) {
@@ -1766,6 +1773,13 @@ func codexInstructionsOAuthOnly(cfg config.CodexInstructionsConfig) bool {
 		return true
 	}
 	return *cfg.OAuthOnly
+}
+
+func codexInstructionsRequireAuthAllow(cfg config.CodexInstructionsConfig) bool {
+	if cfg.RequireAuthAllow == nil {
+		return true
+	}
+	return *cfg.RequireAuthAllow
 }
 
 func codexInstructionsAuthIsOAuth(auth *cliproxyauth.Auth) bool {

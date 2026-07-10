@@ -276,6 +276,12 @@ func (h *Handler) PutCodexInstructions(c *gin.Context) {
 	for i := range body.Models {
 		body.Models[i] = strings.TrimSpace(body.Models[i])
 	}
+	for i := range body.RequestMarkers.Prefixes {
+		body.RequestMarkers.Prefixes[i] = strings.TrimSpace(body.RequestMarkers.Prefixes[i])
+	}
+	for i := range body.RequestMarkers.Suffixes {
+		body.RequestMarkers.Suffixes[i] = strings.TrimSpace(body.RequestMarkers.Suffixes[i])
+	}
 	h.cfg.Codex.Instructions = body
 	h.persist(c)
 }

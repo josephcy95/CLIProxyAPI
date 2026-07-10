@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/codexinstructions"
 	. "github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -253,6 +254,35 @@ func StreamingBootstrapRetries(cfg *config.SDKConfig) int {
 // Default is false.
 func PassthroughHeadersEnabled(cfg *config.SDKConfig) bool {
 	return cfg != nil && cfg.PassthroughHeaders
+}
+
+
+func codexInstructionMarkersFromManager(manager *coreauth.Manager) codexinstructions.MarkerConfig {
+	if manager == nil {
+		return codexinstructions.DefaultMarkers()
+	}
+	return manager.CodexInstructionMarkers()
+}
+
+func applyPrivateCodexInstructionModel(manager *coreauth.Manager, modelName string, meta map[string]any) (string, map[string]any) {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return modelName, meta
+	}
+	parsed := thinking.ParseSuffix(modelName)
+	base := strings.TrimSpace(parsed.ModelName)
+	stripped, private := codexinstructions.ParseModel(base, codexInstructionMarkersFromManager(manager))
+	if !private {
+		return modelName, meta
+	}
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta[coreexecutor.CodexPrivateInstructionsMetadataKey] = true
+	if parsed.HasSuffix {
+		return fmt.Sprintf("%s(%s)", stripped, parsed.RawSuffix), meta
+	}
+	return stripped, meta
 }
 
 func requestExecutionMetadata(ctx context.Context) map[string]any {
@@ -736,6 +766,11 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
+	normalizedModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, normalizedModel, reqMeta)
+	if selectionModel := strings.TrimSpace(execOptions.AuthSelectionModel); selectionModel != "" {
+		selectionModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, selectionModel, reqMeta)
+		addAuthSelectionModelMetadata(reqMeta, selectionModel)
+	}
 	addModelExecutionSourceMetadata(reqMeta, execOptions.InternalSource)
 	setReasoningEffortMetadata(reqMeta, entryProtocol, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
@@ -804,6 +839,11 @@ func (h *BaseAPIHandler) executeCountWithAuthManager(ctx context.Context, handle
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
+	normalizedModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, normalizedModel, reqMeta)
+	if selectionModel := strings.TrimSpace(execOptions.AuthSelectionModel); selectionModel != "" {
+		selectionModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, selectionModel, reqMeta)
+		addAuthSelectionModelMetadata(reqMeta, selectionModel)
+	}
 	setReasoningEffortMetadata(reqMeta, handlerType, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
 	payload := rawJSON
@@ -890,6 +930,11 @@ func (h *BaseAPIHandler) pluginExecutorRequest(ctx context.Context, entryProtoco
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
+	modelName, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, modelName, reqMeta)
+	if selectionModel := strings.TrimSpace(execOptions.AuthSelectionModel); selectionModel != "" {
+		selectionModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, selectionModel, reqMeta)
+		addAuthSelectionModelMetadata(reqMeta, selectionModel)
+	}
 	addModelExecutionSourceMetadata(reqMeta, execOptions.InternalSource)
 	setReasoningEffortMetadata(reqMeta, entryProtocol, modelName, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
@@ -1137,6 +1182,11 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
+	normalizedModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, normalizedModel, reqMeta)
+	if selectionModel := strings.TrimSpace(execOptions.AuthSelectionModel); selectionModel != "" {
+		selectionModel, reqMeta = applyPrivateCodexInstructionModel(h.AuthManager, selectionModel, reqMeta)
+		addAuthSelectionModelMetadata(reqMeta, selectionModel)
+	}
 	addModelExecutionSourceMetadata(reqMeta, execOptions.InternalSource)
 	setReasoningEffortMetadata(reqMeta, entryProtocol, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
@@ -1603,8 +1653,14 @@ func (h *BaseAPIHandler) getRequestDetailsWithOptions(modelName string, allowIma
 
 	parsed := thinking.ParseSuffix(resolvedModelName)
 	baseModel := strings.TrimSpace(parsed.ModelName)
+	// Strip private-instruction markers only for provider/model lookup. Keep the
+	// original resolved model so later execution can detect private mode.
+	lookupModel := baseModel
+	if stripped, private := codexinstructions.ParseModel(baseModel, codexInstructionMarkersFromManager(h.AuthManager)); private {
+		lookupModel = stripped
+	}
 
-	if errMsg := h.validateImageOnlyModel(baseModel, allowImageModel); errMsg != nil {
+	if errMsg := h.validateImageOnlyModel(lookupModel, allowImageModel); errMsg != nil {
 		return nil, "", errMsg
 	}
 
@@ -1612,13 +1668,13 @@ func (h *BaseAPIHandler) getRequestDetailsWithOptions(modelName string, allowIma
 		return []string{"home"}, resolvedModelName, nil
 	}
 
-	providers = util.GetProviderName(baseModel)
+	providers = util.GetProviderName(lookupModel)
 	// Fallback: if baseModel has no provider but differs from resolvedModelName,
 	// try using the full model name. This handles edge cases where custom models
 	// may be registered with their full suffixed name (e.g., "my-model(8192)").
 	// Evaluated in Story 11.8: This fallback is intentionally preserved to support
 	// custom model registrations that include thinking suffixes.
-	if len(providers) == 0 && baseModel != resolvedModelName {
+	if len(providers) == 0 && lookupModel != resolvedModelName {
 		providers = util.GetProviderName(resolvedModelName)
 	}
 

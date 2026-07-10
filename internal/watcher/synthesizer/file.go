@@ -204,6 +204,20 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 			}
 		}
 	}
+	// Read private instructions allow flag from auth file.
+	if rawAllow, ok := metadata["allow_private_instructions"]; ok {
+		switch v := rawAllow.(type) {
+		case bool:
+			if v {
+				a.Attributes["allow_private_instructions"] = "true"
+			}
+		case string:
+			trimmed := strings.ToLower(strings.TrimSpace(v))
+			if trimmed == "1" || trimmed == "true" || trimmed == "yes" || trimmed == "on" {
+				a.Attributes["allow_private_instructions"] = "true"
+			}
+		}
+	}
 	coreauth.ApplyCustomHeadersFromMetadata(a)
 	coreauth.SetOAuthModelAliasesAttribute(a, perAccountModelAliases)
 	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")

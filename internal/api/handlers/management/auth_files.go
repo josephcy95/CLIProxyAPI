@@ -567,7 +567,68 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if websockets, ok := authWebsocketsValue(auth); ok {
 		entry["websockets"] = websockets
 	}
+	if allow, ok := authAllowPrivateInstructionsValue(auth); ok {
+		entry["allow_private_instructions"] = allow
+	}
 	return entry
+}
+
+
+func authAllowPrivateInstructionsValue(auth *coreauth.Auth) (bool, bool) {
+	if auth == nil {
+		return false, false
+	}
+	if auth.Attributes != nil {
+		if raw := strings.TrimSpace(auth.Attributes["allow_private_instructions"]); raw != "" {
+			parsed, errParse := strconv.ParseBool(raw)
+			if errParse == nil {
+				return parsed, true
+			}
+		}
+	}
+	if auth.Metadata == nil {
+		return false, false
+	}
+	raw, ok := auth.Metadata["allow_private_instructions"]
+	if !ok || raw == nil {
+		return false, false
+	}
+	switch v := raw.(type) {
+	case bool:
+		return v, true
+	case string:
+		parsed, errParse := strconv.ParseBool(strings.TrimSpace(v))
+		if errParse == nil {
+			return parsed, true
+		}
+	}
+	return false, false
+}
+
+func syncAuthFileAllowPrivateInstructionsAttribute(auth *coreauth.Auth) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	allow, ok := authFileBoolValue(auth.Metadata["allow_private_instructions"])
+	if !ok || !allow {
+		delete(auth.Attributes, "allow_private_instructions")
+		if auth.Metadata != nil {
+			if !ok {
+				delete(auth.Metadata, "allow_private_instructions")
+			} else {
+				auth.Metadata["allow_private_instructions"] = false
+			}
+		}
+		return
+	}
+	auth.Attributes["allow_private_instructions"] = "true"
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["allow_private_instructions"] = true
 }
 
 func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {
@@ -1660,6 +1721,9 @@ func syncAuthFileMetadataFields(auth *coreauth.Auth, touchedRoots map[string]str
 	}
 	if _, ok := touchedRoots["websockets"]; ok {
 		syncAuthFileWebsocketsAttribute(auth)
+	}
+	if _, ok := touchedRoots["allow_private_instructions"]; ok {
+		syncAuthFileAllowPrivateInstructionsAttribute(auth)
 	}
 	if _, ok := touchedRoots["disabled"]; ok {
 		syncAuthFileDisabledState(auth)
