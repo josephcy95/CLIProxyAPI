@@ -106,6 +106,47 @@ func TestListAuthFiles_IncludesWebsocketsFromManager(t *testing.T) {
 	}
 }
 
+func TestListAuthFiles_IncludesStoredCodexPlanType(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	authDir := t.TempDir()
+	fileName := "codex-k12.json"
+	filePath := filepath.Join(authDir, fileName)
+	if errWrite := os.WriteFile(filePath, []byte(`{"type":"codex","plan_type":"k12"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write auth file: %v", errWrite)
+	}
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	record := &coreauth.Auth{
+		ID:       fileName,
+		FileName: fileName,
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"path": filePath,
+		},
+		Metadata: map[string]any{
+			"type":            "codex",
+			"plan_type":       "k12",
+			"plan_checked_at": "2026-07-13T00:00:00Z",
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+	h.tokenStore = &memoryAuthStore{}
+
+	entry := firstAuthFileEntry(t, h)
+	if got := entry["plan_type"]; got != "k12" {
+		t.Fatalf("expected plan_type %q, got %#v", "k12", got)
+	}
+	if got := entry["plan_checked_at"]; got != "2026-07-13T00:00:00Z" {
+		t.Fatalf("unexpected plan_checked_at %#v", got)
+	}
+}
+
 func TestListAuthFilesFromDisk_IncludesWebsockets(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 

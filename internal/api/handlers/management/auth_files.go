@@ -533,6 +533,14 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
 		entry["id_token"] = claims
 	}
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		if planType := authCodexPlanType(auth); planType != "" {
+			entry["plan_type"] = planType
+		}
+		if planCheckedAt := authMetadataString(auth, "plan_checked_at"); planCheckedAt != "" {
+			entry["plan_checked_at"] = planCheckedAt
+		}
+	}
 	// Expose priority from Attributes (set by synthesizer from JSON "priority" field).
 	// Fall back to Metadata for auths registered via UploadAuthFile (no synthesizer).
 	if p := strings.TrimSpace(authAttribute(auth, "priority")); p != "" {
@@ -614,6 +622,29 @@ func authDisabledReason(auth *coreauth.Auth) string {
 	}
 	reason, _ := auth.Metadata["disabled_reason"].(string)
 	return strings.TrimSpace(reason)
+}
+
+func authCodexPlanType(auth *coreauth.Auth) string {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return ""
+	}
+	if planType := authMetadataString(auth, "plan_type"); planType != "" {
+		return planType
+	}
+	if claims := extractCodexIDTokenClaims(auth); claims != nil {
+		if planType, _ := claims["plan_type"].(string); strings.TrimSpace(planType) != "" {
+			return strings.TrimSpace(planType)
+		}
+	}
+	return strings.TrimSpace(authAttribute(auth, "plan_type"))
+}
+
+func authMetadataString(auth *coreauth.Auth, key string) string {
+	if auth == nil || auth.Metadata == nil {
+		return ""
+	}
+	value, _ := auth.Metadata[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func syncAuthFileAllowPrivateInstructionsAttribute(auth *coreauth.Auth) {
