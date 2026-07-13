@@ -1829,7 +1829,12 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](chunk.Err); ok && se != nil {
 					rerr.HTTPStatus = se.StatusCode()
 				}
-				m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr})
+				// Preserve provider RetryAfter (e.g. xAI free-usage 24h). Without this,
+				// mid-stream failures fall back to the short quota backoff ladder and
+				// the same high-priority auth is reselected almost immediately.
+				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
+				result.RetryAfter = retryAfterFromError(chunk.Err)
+				m.MarkResult(ctx, result)
 			}
 			if !forward {
 				return false
@@ -3837,7 +3842,18 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						auth.StatusMessage = result.Error.Message
 					}
 
+					// Prefer provider RetryAfter; for known xAI exhaustion codes, fall back to
+					// configured long cooldowns so a missing RetryAfter (mid-stream path) does
+					// not collapse to the 1s quota backoff ladder.
+					effectiveRetryAfter := m.effectiveRetryAfterForResult(result)
 					statusCode := statusCodeFromResult(result.Error)
+					if statusCode == 0 && isXAIFreeUsageExhaustedErrorMessage(result.Error) {
+						// Body looks like free-usage exhaustion but status was lost; treat as 429.
+						statusCode = http.StatusTooManyRequests
+						if result.Error != nil {
+							result.Error.HTTPStatus = http.StatusTooManyRequests
+						}
+					}
 					if isModelSupportResultError(result.Error) {
 						next := now.Add(12 * time.Hour)
 						state.NextRetryAfter = next
@@ -3880,8 +3896,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								state.NextRetryAfter = time.Time{}
 							} else {
 								cooldown := 30 * time.Minute
-								if result.RetryAfter != nil && *result.RetryAfter >= 0 {
-									cooldown = *result.RetryAfter
+								if effectiveRetryAfter != nil && *effectiveRetryAfter >= 0 {
+									cooldown = *effectiveRetryAfter
 								}
 								next := now.Add(cooldown)
 								state.NextRetryAfter = next
@@ -3901,8 +3917,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							var next time.Time
 							backoffLevel := state.Quota.BackoffLevel
 							if !disableCooling {
-								if result.RetryAfter != nil {
-									next = now.Add(*result.RetryAfter)
+								if effectiveRetryAfter != nil {
+									next = now.Add(*effectiveRetryAfter)
 								} else {
 									next, backoffLevel = quotaCooldownAfterFailure(state.Quota, now)
 								}
@@ -4035,12 +4051,50 @@ func (m *Manager) xaiExhaustionKindForResult(result Result) xaiExhaustionKind {
 }
 
 func isXAIFreeUsageExhaustedError(resultErr *Error) bool {
-	if resultErr == nil || resultErr.HTTPStatus != http.StatusTooManyRequests {
+	if resultErr == nil {
+		return false
+	}
+	// Prefer an explicit 429, but also accept free-usage body text when status was lost
+	// on the stream path so cooldown + exhaustion counters still apply.
+	if resultErr.HTTPStatus != 0 && resultErr.HTTPStatus != http.StatusTooManyRequests {
+		return false
+	}
+	return isXAIFreeUsageExhaustedErrorMessage(resultErr)
+}
+
+func isXAIFreeUsageExhaustedErrorMessage(resultErr *Error) bool {
+	if resultErr == nil {
 		return false
 	}
 	body := strings.ToLower(resultErr.Message)
 	return strings.Contains(body, "free-usage-exhausted") ||
 		strings.Contains(body, "included free usage")
+}
+
+// effectiveRetryAfterForResult returns the provider RetryAfter when present; otherwise, for
+// known xAI free-usage / other-403 failures, the configured long cooldown duration.
+func (m *Manager) effectiveRetryAfterForResult(result Result) *time.Duration {
+	if result.RetryAfter != nil {
+		value := *result.RetryAfter
+		return &value
+	}
+	if m == nil || !strings.EqualFold(strings.TrimSpace(result.Provider), "xai") || result.Error == nil {
+		return nil
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	policy := internalconfig.DefaultXAIConfig()
+	if cfg != nil {
+		policy = internalconfig.NormalizeXAIConfig(cfg.XAI)
+	}
+	if isXAIFreeUsageExhaustedError(result.Error) || isXAIFreeUsageExhaustedErrorMessage(result.Error) {
+		d := time.Duration(policy.FreeUsageExhaustedCooldownHoursValue()) * time.Hour
+		return &d
+	}
+	if result.Error.HTTPStatus == http.StatusForbidden && !isXAIPermissionDeniedError(result.Error) {
+		d := time.Duration(policy.OtherForbiddenCooldownHoursValue()) * time.Hour
+		return &d
+	}
+	return nil
 }
 
 func isXAIPermissionDeniedError(resultErr *Error) bool {

@@ -190,6 +190,107 @@ func TestManagerMarkResult_FreeUsageExhaustionDisablesAfterThreshold(t *testing.
 	}
 }
 
+func TestManagerMarkResult_FreeUsageUsesConfiguredCooldownWithoutRetryAfter(t *testing.T) {
+	// Reproduces the mid-stream path: free-usage body is present but RetryAfter was not
+	// propagated, so MarkResult used to fall back to the 1s quota backoff ladder and the
+	// same high-priority auth was reselected on every chat turn.
+	freeCooldownHours := 24
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{
+		XAI: internalconfig.XAIConfig{
+			FreeUsageExhaustedCooldownHours: &freeCooldownHours,
+		},
+	})
+
+	auth := &Auth{ID: "xai-free-usage-no-retry", Provider: "xai", Metadata: map[string]any{"type": "xai"}}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	before := time.Now()
+	manager.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "xai",
+		Model:    "grok-4.5-build-free",
+		Success:  false,
+		// No RetryAfter — simulates wrapStreamResult before the fix.
+		Error: &Error{
+			HTTPStatus: http.StatusTooManyRequests,
+			Message:    `{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now."}`,
+		},
+	})
+	after := time.Now()
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("auth missing after free-usage hit")
+	}
+	state := updated.ModelStates["grok-4.5-build-free"]
+	if state == nil {
+		t.Fatal("expected model state for free-usage model")
+	}
+	if !state.Unavailable {
+		t.Fatal("expected model unavailable after free-usage")
+	}
+	if state.NextRetryAfter.IsZero() {
+		t.Fatal("expected NextRetryAfter to be set without provider RetryAfter")
+	}
+	minNext := before.Add(24 * time.Hour).Add(-2 * time.Second)
+	maxNext := after.Add(24 * time.Hour).Add(2 * time.Second)
+	if state.NextRetryAfter.Before(minNext) || state.NextRetryAfter.After(maxNext) {
+		t.Fatalf("NextRetryAfter = %v, want ~24h from now (between %v and %v)", state.NextRetryAfter, minNext, maxNext)
+	}
+	if !state.Quota.Exceeded {
+		t.Fatal("expected quota exceeded for free-usage")
+	}
+
+	// Selector must block this auth for the free-usage model.
+	blocked, reason, next := isAuthBlockedForModel(updated, "grok-4.5-build-free", time.Now())
+	if !blocked {
+		t.Fatal("auth must be blocked for free-usage model after cooldown")
+	}
+	if reason != blockReasonCooldown {
+		t.Fatalf("block reason = %v, want cooldown", reason)
+	}
+	if next.IsZero() || next.Before(time.Now()) {
+		t.Fatalf("block next = %v, want future cooldown time", next)
+	}
+}
+
+func TestManagerMarkResult_FreeUsageBodyWithoutStatusStillCooldowns(t *testing.T) {
+	freeCooldownHours := 24
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{
+		XAI: internalconfig.XAIConfig{
+			FreeUsageExhaustedCooldownHours: &freeCooldownHours,
+		},
+	})
+	auth := &Auth{ID: "xai-free-usage-no-status", Provider: "xai", Metadata: map[string]any{"type": "xai"}}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "xai",
+		Model:    "grok-4.5",
+		Success:  false,
+		Error: &Error{
+			// Status lost on some stream paths; body still identifies free-usage.
+			Message: `{"code":"subscription:free-usage-exhausted","error":"included free usage exhausted"}`,
+		},
+	})
+
+	updated, _ := manager.GetByID(auth.ID)
+	state := updated.ModelStates["grok-4.5"]
+	if state == nil || !state.Unavailable || state.NextRetryAfter.IsZero() {
+		t.Fatalf("expected free-usage cooldown from body alone, state=%+v", state)
+	}
+	if time.Until(state.NextRetryAfter) < 23*time.Hour {
+		t.Fatalf("NextRetryAfter too soon: %v (want ~24h)", state.NextRetryAfter)
+	}
+}
+
 func TestManagerMarkResult_FreeUsageSuccessResetsCounter(t *testing.T) {
 	disableAfter := 3
 	manager := NewManager(nil, nil, nil)
