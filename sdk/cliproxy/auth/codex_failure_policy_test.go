@@ -40,6 +40,19 @@ func authFailureResult(authID, model string) Result {
 	}
 }
 
+func paymentRequiredResult(authID, model string) Result {
+	return Result{
+		AuthID:   authID,
+		Provider: "codex",
+		Model:    model,
+		Success:  false,
+		Error: &Error{
+			HTTPStatus: http.StatusPaymentRequired,
+			Message:    `{"detail":{"code":"deactivated_workspace"}}`,
+		},
+	}
+}
+
 func TestManagerMarkResult_CodexUsageLimitDisablesAfterThreshold(t *testing.T) {
 	disableAfter := 3
 	manager := NewManager(nil, nil, nil)
@@ -163,6 +176,71 @@ func TestManagerMarkResult_CodexAuthFailureDisables(t *testing.T) {
 	reason, _ := updated.Metadata["disabled_reason"].(string)
 	if reason == "" {
 		t.Fatal("expected disabled_reason")
+	}
+}
+
+func TestManagerMarkResult_CodexPaymentRequiredDisablesAuth(t *testing.T) {
+	autoDisable := true
+	disableAfter := 1
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{
+		Codex: internalconfig.CodexConfig{
+			AutoDisableAuthFailures: &autoDisable,
+			AuthFailureDisableAfter: &disableAfter,
+		},
+	})
+	auth := &Auth{ID: "codex-402", Provider: "codex", Metadata: map[string]any{"type": "codex"}}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	manager.MarkResult(context.Background(), paymentRequiredResult(auth.ID, "gpt-5.4"))
+	updated, _ := manager.GetByID(auth.ID)
+	if !updated.Disabled {
+		t.Fatal("expected Codex 402 / deactivated_workspace to disable the entire auth file")
+	}
+	if got, _ := updated.Metadata["disabled"].(bool); !got {
+		t.Fatal("metadata disabled missing")
+	}
+	reason, _ := updated.Metadata["disabled_reason"].(string)
+	if !strings.Contains(reason, "deactivated_workspace") {
+		t.Fatalf("disabled_reason = %q, want deactivated_workspace body", reason)
+	}
+	// File-level death must not leave the credential in a cool-and-retry loop.
+	if st := updated.ModelStates["gpt-5.4"]; st != nil && st.Unavailable && !st.NextRetryAfter.IsZero() {
+		// Disable path runs before model cool; after disable, auth is out of the pool either way.
+		// Still assert we did not only cool without disable (already checked above).
+	}
+}
+
+func TestManagerMarkResult_CodexDeactivatedWorkspaceBodyDisablesWithoutStatus(t *testing.T) {
+	autoDisable := true
+	disableAfter := 1
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{
+		Codex: internalconfig.CodexConfig{
+			AutoDisableAuthFailures: &autoDisable,
+			AuthFailureDisableAfter: &disableAfter,
+		},
+	})
+	auth := &Auth{ID: "codex-deactivated-body", Provider: "codex"}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	manager.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "codex",
+		Model:    "gpt-5.4",
+		Success:  false,
+		Error: &Error{
+			// Status sometimes lost on remaps; body alone must still kill the auth.
+			HTTPStatus: 0,
+			Message:    `{"detail":{"code":"deactivated_workspace"}}`,
+			Code:       "deactivated_workspace",
+		},
+	})
+	updated, _ := manager.GetByID(auth.ID)
+	if !updated.Disabled {
+		t.Fatal("expected deactivated_workspace body match to disable auth without HTTP status")
 	}
 }
 

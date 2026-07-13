@@ -197,8 +197,9 @@ codex:
   # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
   identity-confuse: false
   # Disable an auth file after confirmed auth-death failures (invalid token, invalid_grant,
-  # auth_unavailable after re-auth is required). First hit counts; set disable-after 0 (or
-  # turn this off) to only cool without permanent disable. Reason is stored as disabled_reason.
+  # auth_unavailable after re-auth is required, HTTP 402 / deactivated_workspace, etc.).
+  # First hit counts; set disable-after 0 (or turn this off) to only cool without permanent
+  # disable. Reason is stored as disabled_reason. No separate 402 knob — same path as auth death.
   auto-disable-auth-failures: true
   auth-failure-disable-after: 1
   # After this many usage_limit_reached events (first hit + post-cooldown re-hits), disable the

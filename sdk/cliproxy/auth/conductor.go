@@ -3874,7 +3874,9 @@ func isCodexHardAuthFailureError(resultErr *Error) bool {
 		return true
 	}
 	body := strings.ToLower(resultErr.Message + " " + resultErr.Code)
-	if strings.Contains(body, "auth_unavailable") ||
+	// Workspace/account death codes even when status is missing or remapped.
+	if strings.Contains(body, "deactivated_workspace") ||
+		strings.Contains(body, "auth_unavailable") ||
 		strings.Contains(body, "authentication_error") ||
 		strings.Contains(body, "invalid_api_key") ||
 		strings.Contains(body, "invalid or expired token") ||
@@ -3887,14 +3889,20 @@ func isCodexHardAuthFailureError(resultErr *Error) bool {
 		return true
 	}
 	status := resultErr.HTTPStatus
-	if status == http.StatusUnauthorized {
+	switch status {
+	case http.StatusUnauthorized:
 		// 401 without request-scoped noise is treated as auth death for Codex OAuth pools.
 		if isRequestScopedNotFoundResultError(resultErr) || isModelSupportResultError(resultErr) {
 			return false
 		}
 		return true
+	case http.StatusPaymentRequired:
+		// Codex 402 (e.g. deactivated_workspace) means the account/workspace is unusable.
+		// Treat as file-level auth death so the credential leaves the pool instead of a 30m cool loop.
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // trackCodexExhaustionCounter increments usage-limit / auth-failure counters and may disable
