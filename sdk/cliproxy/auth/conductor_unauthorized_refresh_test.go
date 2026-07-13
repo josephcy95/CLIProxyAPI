@@ -249,12 +249,15 @@ func TestManager_Execute_UnauthorizedRefreshFailureFallsBackToNextAuth(t *testin
 	if !ok || updated == nil {
 		t.Fatalf("primary auth missing after failed refresh")
 	}
-	state := updated.ModelStates[model]
-	if state == nil || !state.Unavailable {
-		t.Fatalf("expected primary model to be suspended after refresh failure")
+	// Codex hard-auth policy treats a confirmed 401 as whole-auth death (default
+	// auth-failure-disable-after: 1), so the credential is disabled rather than
+	// only suspending the single model for a 30m cooldown.
+	if !updated.Disabled || updated.Status != StatusDisabled {
+		t.Fatalf("expected primary auth disabled after failed refresh, Disabled=%v Status=%v Message=%q",
+			updated.Disabled, updated.Status, updated.StatusMessage)
 	}
-	if state.StatusMessage != "unauthorized" && (state.LastError == nil || state.LastError.StatusCode() != http.StatusUnauthorized) {
-		t.Fatalf("expected unauthorized suspension, got state=%+v", state)
+	if updated.LastError == nil || updated.LastError.StatusCode() != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized last error on disabled auth, got LastError=%+v", updated.LastError)
 	}
 }
 
