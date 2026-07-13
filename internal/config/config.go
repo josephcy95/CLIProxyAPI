@@ -353,9 +353,10 @@ func (value XAIConfig) FreeUsageExhaustedCooldownHoursValue() int {
 // CodexInstructionsConfig configures additional instructions injected into the
 // final Codex Responses API instructions field.
 //
-// Injection is opt-in per request via model markers (for example private/gpt-5.6-sol
-// or gpt-5.6-sol-private). When require-auth-allow is true (default), only auth files
-// marked with allow_private_instructions may serve those private requests.
+// Injection is opt-in per request via model markers when UsePrefixSuffix is enabled
+// (for example private/gpt-5.6-sol or gpt-5.6-sol-private). When require-auth-allow
+// is true (default), only auth files marked with allow_private_instructions may serve
+// private requests.
 type CodexInstructionsConfig struct {
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
 	Mode      string   `yaml:"mode" json:"mode"`
@@ -369,6 +370,9 @@ type CodexInstructionsConfig struct {
 	// ReserveMarkedAuths excludes marked auths from normal (non-private) traffic.
 	// Defaults to false so marked accounts still handle ordinary requests.
 	ReserveMarkedAuths bool `yaml:"reserve-marked-auths,omitempty" json:"reserve-marked-auths,omitempty"`
+	// UsePrefixSuffix keeps private mode opt-in through configured model prefixes and suffixes.
+	// Defaults to true when omitted. When false, every eligible Codex request uses private mode.
+	UsePrefixSuffix *bool `yaml:"use-prefix-suffix,omitempty" json:"use-prefix-suffix,omitempty"`
 	// RequestMarkers configures model prefixes/suffixes that enable private mode.
 	// Defaults to prefixes=["private/"] and suffixes=["-private"] when both empty.
 	RequestMarkers CodexInstructionMarkersConfig `yaml:"request-markers,omitempty" json:"request-markers,omitempty"`

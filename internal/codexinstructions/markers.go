@@ -102,6 +102,46 @@ func RequestIsPrivate(meta map[string]any) bool {
 	return boolFromAny(meta[RequestPrivateMetadataKey])
 }
 
+// ModelMatches reports whether a model is eligible for configured private instructions.
+func ModelMatches(patterns []string, model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	if len(patterns) == 0 {
+		patterns = []string{"gpt-5.5", "gpt-5*"}
+	}
+	for _, pattern := range patterns {
+		if matchModelPattern(strings.TrimSpace(pattern), model) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchModelPattern(pattern, value string) bool {
+	if pattern == "" {
+		return false
+	}
+	if pattern == "*" || pattern == value {
+		return true
+	}
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 || !strings.HasPrefix(value, parts[0]) {
+		return false
+	}
+	pos := len(parts[0])
+	for _, part := range parts[1 : len(parts)-1] {
+		idx := strings.Index(value[pos:], part)
+		if idx < 0 {
+			return false
+		}
+		pos += idx + len(part)
+	}
+	last := parts[len(parts)-1]
+	return last == "" || strings.HasSuffix(value[pos:], last)
+}
+
 func normalizeList(values []string) []string {
 	if len(values) == 0 {
 		return nil

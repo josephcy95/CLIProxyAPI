@@ -271,7 +271,11 @@ func applyPrivateCodexInstructionModel(manager *coreauth.Manager, modelName stri
 	}
 	parsed := thinking.ParseSuffix(modelName)
 	base := strings.TrimSpace(parsed.ModelName)
-	stripped, private := codexinstructions.ParseModel(base, codexInstructionMarkersFromManager(manager))
+	stripped := base
+	private := manager.CodexInstructionsApplyWithoutPrefixSuffix(base)
+	if !private {
+		stripped, private = codexinstructions.ParseModel(base, codexInstructionMarkersFromManager(manager))
+	}
 	if !private {
 		return modelName, meta
 	}

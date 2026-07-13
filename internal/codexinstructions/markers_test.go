@@ -36,3 +36,12 @@ func TestAuthAllows(t *testing.T) {
 		t.Fatal("false should not allow")
 	}
 }
+
+func TestModelMatches(t *testing.T) {
+	if !ModelMatches([]string{"gpt-5*"}, "gpt-5.5") {
+		t.Fatal("expected gpt-5.5 to match gpt-5*")
+	}
+	if ModelMatches([]string{"gpt-5*"}, "grok-4.5") {
+		t.Fatal("did not expect grok-4.5 to match gpt-5*")
+	}
+}

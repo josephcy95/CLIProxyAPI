@@ -1823,45 +1823,7 @@ func codexInstructionsAuthIsOAuth(auth *cliproxyauth.Auth) bool {
 }
 
 func codexInstructionsModelMatches(patterns []string, model string) bool {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return false
-	}
-	if len(patterns) == 0 {
-		patterns = []string{"gpt-5.5", "gpt-5*"}
-	}
-	for _, pattern := range patterns {
-		if matchCodexInstructionPattern(strings.TrimSpace(pattern), model) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchCodexInstructionPattern(pattern, value string) bool {
-	if pattern == "" {
-		return false
-	}
-	if pattern == "*" || pattern == value {
-		return true
-	}
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 1 {
-		return false
-	}
-	if !strings.HasPrefix(value, parts[0]) {
-		return false
-	}
-	pos := len(parts[0])
-	for _, part := range parts[1 : len(parts)-1] {
-		idx := strings.Index(value[pos:], part)
-		if idx < 0 {
-			return false
-		}
-		pos += idx + len(part)
-	}
-	last := parts[len(parts)-1]
-	return last == "" || strings.HasSuffix(value, last)
+	return codexinstructions.ModelMatches(patterns, model)
 }
 
 func joinCodexInstructions(first, second string) string {

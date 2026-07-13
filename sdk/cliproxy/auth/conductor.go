@@ -479,6 +479,18 @@ func (m *Manager) CodexInstructionMarkers() codexinstructions.MarkerConfig {
 	}
 }
 
+// CodexInstructionsApplyWithoutPrefixSuffix reports whether a model should use private mode without markers.
+func (m *Manager) CodexInstructionsApplyWithoutPrefixSuffix(model string) bool {
+	if m == nil {
+		return false
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	if cfg == nil || !cfg.Codex.Instructions.Enabled || cfg.Codex.Instructions.UsePrefixSuffix == nil || *cfg.Codex.Instructions.UsePrefixSuffix {
+		return false
+	}
+	return codexinstructions.ModelMatches(cfg.Codex.Instructions.Models, model)
+}
+
 func (m *Manager) SetSelector(selector Selector) {
 	if m == nil {
 		return

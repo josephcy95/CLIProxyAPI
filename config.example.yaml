@@ -204,8 +204,10 @@ codex:
       - "gpt-5.5"
       - "gpt-5*"
     oauth-only: true
-    # Private mode is request-opt-in via model markers, e.g. private/gpt-5.6-sol
-    # or gpt-5.6-sol-private. Mark eligible auth files with:
+    # When true, private mode is request-opt-in via model markers, e.g. private/gpt-5.6-sol
+    # or gpt-5.6-sol-private. Set false to inject private instructions for every eligible request.
+    use-prefix-suffix: true
+    # Mark eligible auth files with:
     #   "allow_private_instructions": true
     require-auth-allow: true
     # When true, marked auths are reserved for private requests only.
