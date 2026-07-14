@@ -148,6 +148,57 @@ func TestSchedulerPick_FillFirstSticksToFirstReady(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_AllMatchingAuthsTriedReportsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	scheduler := newSchedulerForTest(
+		&FillFirstSelector{},
+		&Auth{ID: "auth-a", Provider: "codex"},
+	)
+
+	got, errPick := scheduler.pickSingle(
+		context.Background(),
+		"codex",
+		"",
+		cliproxyexecutor.Options{},
+		map[string]struct{}{"auth-a": {}},
+	)
+	if got != nil {
+		t.Fatalf("pickSingle() auth = %v, want nil", got)
+	}
+	var authErr *Error
+	if !errors.As(errPick, &authErr) || authErr == nil {
+		t.Fatalf("pickSingle() error = %T %v, want *Error", errPick, errPick)
+	}
+	if authErr.Code != "auth_unavailable" {
+		t.Fatalf("pickSingle() error code = %q, want auth_unavailable", authErr.Code)
+	}
+}
+
+func TestSchedulerPick_MissingPinnedAuthStillReportsNotFound(t *testing.T) {
+	t.Parallel()
+
+	scheduler := newSchedulerForTest(
+		&FillFirstSelector{},
+		&Auth{ID: "auth-a", Provider: "codex"},
+	)
+	opts := cliproxyexecutor.Options{
+		Metadata: map[string]any{cliproxyexecutor.PinnedAuthMetadataKey: "auth-missing"},
+	}
+
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", opts, nil)
+	if got != nil {
+		t.Fatalf("pickSingle() auth = %v, want nil", got)
+	}
+	var authErr *Error
+	if !errors.As(errPick, &authErr) || authErr == nil {
+		t.Fatalf("pickSingle() error = %T %v, want *Error", errPick, errPick)
+	}
+	if authErr.Code != "auth_not_found" {
+		t.Fatalf("pickSingle() error code = %q, want auth_not_found", authErr.Code)
+	}
+}
+
 func TestSchedulerPick_PromotesExpiredCooldownBeforePick(t *testing.T) {
 	t.Parallel()
 

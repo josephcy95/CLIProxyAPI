@@ -221,11 +221,17 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	if shard == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	predicate := func(entry *scheduledAuth) bool {
+	candidatePredicate := func(entry *scheduledAuth) bool {
 		if entry == nil || entry.auth == nil {
 			return false
 		}
 		if pinnedAuthID != "" && entry.auth.ID != pinnedAuthID {
+			return false
+		}
+		return true
+	}
+	predicate := func(entry *scheduledAuth) bool {
+		if !candidatePredicate(entry) {
 			return false
 		}
 		if len(tried) > 0 {
@@ -238,7 +244,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
 		return picked, nil
 	}
-	return nil, shard.unavailableErrorLocked(provider, model, predicate)
+	return nil, shard.unavailableErrorLocked(provider, model, candidatePredicate, predicate)
 }
 
 func providerPrefersWebsocketTransport(providerKey string) bool {
@@ -294,8 +300,14 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 			return nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
 		shard := providerState.ensureModelLocked(modelKey, time.Now())
-		predicate := func(entry *scheduledAuth) bool {
+		candidatePredicate := func(entry *scheduledAuth) bool {
 			if entry == nil || entry.auth == nil || entry.auth.ID != pinnedAuthID {
+				return false
+			}
+			return true
+		}
+		predicate := func(entry *scheduledAuth) bool {
+			if !candidatePredicate(entry) {
 				return false
 			}
 			if len(tried) == 0 {
@@ -307,7 +319,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 		if picked := shard.pickReadyLocked(false, strategy, predicate); picked != nil {
 			return picked, providerKey, nil
 		}
-		return nil, "", shard.unavailableErrorLocked("mixed", model, predicate)
+		return nil, "", shard.unavailableErrorLocked("mixed", model, candidatePredicate, predicate)
 	}
 
 	predicate := triedPredicate(tried)
@@ -412,6 +424,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model string, tried map[string]struct{}) error {
 	now := time.Now()
 	total := 0
+	candidateTotal := 0
 	cooldownCount := 0
 	earliest := time.Time{}
 	for _, providerKey := range providers {
@@ -425,12 +438,17 @@ func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model st
 		}
 		localTotal, localCooldownCount, localEarliest := shard.availabilitySummaryLocked(triedPredicate(tried))
 		total += localTotal
+		localCandidateTotal, _, _ := shard.availabilitySummaryLocked(nil)
+		candidateTotal += localCandidateTotal
 		cooldownCount += localCooldownCount
 		if !localEarliest.IsZero() && (earliest.IsZero() || localEarliest.Before(earliest)) {
 			earliest = localEarliest
 		}
 	}
 	if total == 0 {
+		if candidateTotal > 0 {
+			return &Error{Code: "auth_unavailable", Message: "no auth available"}
+		}
 		return &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 	if cooldownCount == total && !earliest.IsZero() {
@@ -815,10 +833,16 @@ func (m *modelScheduler) readyCountAtPriorityLocked(preferWebsocket bool, priori
 }
 
 // unavailableErrorLocked returns the correct unavailable or cooldown error for the shard.
-func (m *modelScheduler) unavailableErrorLocked(provider, model string, predicate func(*scheduledAuth) bool) error {
+// candidatePredicate identifies credentials that belong to the requested route, while
+// availablePredicate additionally excludes credentials already attempted by this request.
+func (m *modelScheduler) unavailableErrorLocked(provider, model string, candidatePredicate, availablePredicate func(*scheduledAuth) bool) error {
 	now := time.Now()
-	total, cooldownCount, earliest := m.availabilitySummaryLocked(predicate)
+	total, cooldownCount, earliest := m.availabilitySummaryLocked(availablePredicate)
 	if total == 0 {
+		candidateTotal, _, _ := m.availabilitySummaryLocked(candidatePredicate)
+		if candidateTotal > 0 {
+			return &Error{Code: "auth_unavailable", Message: "no auth available"}
+		}
 		return &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 	if cooldownCount == total && !earliest.IsZero() {

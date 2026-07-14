@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -469,6 +470,10 @@ func TestExecuteStreamWithAuthManager_DoesNotRetryAfterFirstByte(t *testing.T) {
 func TestExecuteStreamWithAuthManager_EnrichesBootstrapRetryAuthUnavailableError(t *testing.T) {
 	executor := &failOnceStreamExecutor{}
 	manager := coreauth.NewManager(nil, nil, nil)
+	autoDisable := false
+	manager.SetConfig(&internalconfig.Config{
+		Codex: internalconfig.CodexConfig{AutoDisableAuthFailures: &autoDisable},
+	})
 	manager.RegisterExecutor(executor)
 
 	auth1 := &coreauth.Auth{
