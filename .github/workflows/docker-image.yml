@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -66,10 +68,14 @@ jobs:
           image_name="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           commit="$(git rev-parse --short HEAD)"
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          version="${tag}"
+          if [ "${tag}" = "latest" ]; then
+            version="$(git describe --tags --abbrev=0)"
+          fi
           echo "IMAGE_NAME=${image_name}" >> "${GITHUB_ENV}"
           echo "IMAGE_TAG=${tag}" >> "${GITHUB_ENV}"
           echo "PLATFORMS=${platforms}" >> "${GITHUB_ENV}"
-          echo "VERSION=${tag}" >> "${GITHUB_ENV}"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
           echo "COMMIT=${commit}" >> "${GITHUB_ENV}"
           echo "BUILD_DATE=${build_date}" >> "${GITHUB_ENV}"
 
