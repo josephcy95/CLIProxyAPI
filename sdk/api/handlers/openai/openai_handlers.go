@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -67,7 +68,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 	// Get all available models
 	allModels := h.Models()
 
-	// Filter to only include the 4 required fields: id, object, created, owned_by
+	// Return the standard OpenAI identity fields plus optional capability metadata.
 	filteredModels := make([]map[string]any, len(allModels))
 	for i, model := range allModels {
 		filteredModel := map[string]any{
@@ -84,6 +85,16 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 		if ownedBy, exists := model["owned_by"]; exists {
 			filteredModel["owned_by"] = ownedBy
 		}
+		if contextWindow, exists := model["context_length"]; exists {
+			filteredModel["context_window"] = contextWindow
+			filteredModel["max_context_window"] = contextWindow
+		}
+		if modelID, ok := model["id"].(string); ok {
+			if reasoningLevels, defaultLevel := openAIModelReasoningMetadata(modelID); len(reasoningLevels) > 0 {
+				filteredModel["supported_reasoning_levels"] = reasoningLevels
+				filteredModel["default_reasoning_level"] = defaultLevel
+			}
+		}
 
 		filteredModels[i] = filteredModel
 	}
@@ -92,6 +103,33 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 		"object": "list",
 		"data":   filteredModels,
 	})
+}
+
+func openAIModelReasoningMetadata(modelID string) ([]string, string) {
+	info := registry.LookupModelInfo(modelID)
+	if info == nil || info.Thinking == nil || len(info.Thinking.Levels) == 0 {
+		return nil, ""
+	}
+
+	levels := make([]string, 0, len(info.Thinking.Levels))
+	defaultLevel := ""
+	for _, rawLevel := range info.Thinking.Levels {
+		level := strings.ToLower(strings.TrimSpace(rawLevel))
+		if level == "" {
+			continue
+		}
+		levels = append(levels, level)
+		if (defaultLevel == "" && level != "none") || level == "medium" {
+			defaultLevel = level
+		}
+	}
+	if len(levels) == 0 {
+		return nil, ""
+	}
+	if defaultLevel == "" {
+		defaultLevel = levels[0]
+	}
+	return levels, defaultLevel
 }
 
 // ChatCompletions handles the /v1/chat/completions endpoint.

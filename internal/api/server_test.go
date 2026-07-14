@@ -724,10 +724,12 @@ func TestModelsDispatchByAnthropicVersionHeader(t *testing.T) {
 			MaxCompletionTokens: 64000,
 		},
 		{
-			ID:      "gpt-4o",
-			Object:  "model",
-			OwnedBy: "openai",
-			Type:    "openai",
+			ID:            "gpt-4o",
+			Object:        "model",
+			OwnedBy:       "openai",
+			Type:          "openai",
+			ContextLength: 128000,
+			Thinking:      &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}},
 		},
 	})
 	t.Cleanup(func() {
@@ -819,6 +821,19 @@ func TestModelsDispatchByAnthropicVersionHeader(t *testing.T) {
 			}
 			if id, _ := m["id"].(string); id == "gpt-4o" {
 				foundRawGPT = true
+				if got, ok := m["context_window"].(float64); !ok || got != 128000 {
+					t.Fatalf("context_window = %v, want 128000", m["context_window"])
+				}
+				if got, ok := m["max_context_window"].(float64); !ok || got != 128000 {
+					t.Fatalf("max_context_window = %v, want 128000", m["max_context_window"])
+				}
+				levels, ok := m["supported_reasoning_levels"].([]any)
+				if !ok || len(levels) != 3 || levels[1] != "medium" {
+					t.Fatalf("supported_reasoning_levels = %v, want [low medium high]", m["supported_reasoning_levels"])
+				}
+				if got, _ := m["default_reasoning_level"].(string); got != "medium" {
+					t.Fatalf("default_reasoning_level = %q, want medium", got)
+				}
 			}
 			if id, _ := m["id"].(string); id == "claude-gpt-4o" || id == "claude-fable-5-dd-o4-tpg" {
 				t.Fatalf("did not expect Anthropic id rewrite on OpenAI format models, got %v", m)
