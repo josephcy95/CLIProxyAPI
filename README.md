@@ -1,38 +1,36 @@
-# CLI Proxy API（运维分叉）
+# CLI Proxy API（运维二开）
 
 [English](README_EN.md)
 
-基于 [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 的分叉，给共享 OAuth 账号池用。上游文档、安装、Provider、SDK 都去那边看；这边只列改动。
+基于 [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 的二开，主要给共享 OAuth 账号池用。安装、Provider、SDK 这些还是看上游文档，这边只写我加了啥。
 
-会定期 merge 上游 `main`。
+会时不时跟着上游更新版本。
 
-## 改了什么
+## 改了啥
 
 **xAI / Codex 账号池**
 
-- 额度 / usage-limit 后按模型 cooldown，状态写在 auth JSON 里，重载不丢
-- 流式额度错误保留 RetryAfter，不会掉进短重试循环
-- 可配置自动踢掉：xAI 反复耗尽免费额度 / 不可用 403；Codex 凭证死掉、反复 usage-limit、`402`、`deactivated_workspace`
-- 调度跳过 cooldown 中的凭证
+- 额度 / usage-limit 之后按模型进 cooldown，状态直接写进 auth JSON，重载也不丢
+- 流式请求里的额度错误会把 RetryAfter 留住，不会掉进无意义的短重试循环
+- 可以自动踢号：xAI 老是刷完免费额度 / 不可用 403；Codex 凭证挂了、反复 usage-limit、`402`、`deactivated_workspace`
+- 还在 cooldown 的凭证，调度直接跳过
 
 **Codex 私有指令（破限提示词）**
 
-- 模型标记路由或无标记模式
-- 按 auth 文件开关；可选把带标记账号只留给私有指令流量
+- 支持模型标记路由，也可以关标记
+- 按 auth 文件单独开；可选：带标记的账号只接私有指令流量
 
 **管理侧**
 
-- 管理 API 暴露 xAI 运行时状态、Codex 套餐元数据、失败策略开关
-- 配套 UI：[Management Center 分叉](https://github.com/josephcy95/Cli-Proxy-API-Management-Center)（更干净一点，Auth Files 筛选更好用）
+- 管理 API 能看到 xAI 运行时状态、Codex 套餐信息，以及失败策略开关
+- 配套 UI：[Management Center](https://github.com/josephcy95/Cli-Proxy-API-Management-Center)（界面干净一点，Auth Files 筛选更好用）
 
-## 下载
+## 安装
 
-- [Releases](https://github.com/josephcy95/CLIProxyAPI/releases)
-- Docker：`ghcr.io/josephcy95/cli-proxy-api:latest`（或 pin 版本如 `v7.2.74`）
-- 管理 UI：服务起来后 `/management.html`
+```bash
+docker pull ghcr.io/josephcy95/cli-proxy-api:latest
+```
 
-## 其它
+二进制在 [Releases](https://github.com/josephcy95/CLIProxyAPI/releases)。服务起来之后打开 `/management.html` 就是管理界面。
 
-Auth 文件、token、management key 别提交、别裸奔。
-
-Thanks [LINUX DO](https://linux.do/)。MIT，上游协议与署名保留。
+感谢 [LINUX DO](https://linux.do/) 社区的交流。MIT，上游协议和署名照旧保留。
