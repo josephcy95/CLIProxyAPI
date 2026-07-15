@@ -3800,11 +3800,19 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 }
 
 func (m *Manager) shouldAutoDisableXAIAuth(result Result) bool {
-	if m == nil || !strings.EqualFold(strings.TrimSpace(result.Provider), "xai") || result.Error == nil || result.Error.HTTPStatus != http.StatusForbidden {
+	if m == nil || !strings.EqualFold(strings.TrimSpace(result.Provider), "xai") || result.Error == nil {
 		return false
 	}
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
 	if cfg == nil || !cfg.XAI.AutoDisablePermissionDeniedEnabled() {
+		return false
+	}
+	// 401: execute paths already try one OAuth refresh before MarkResult; a surviving
+	// 401 (or bearer keys with nothing to refresh) is treated as permanent auth death.
+	if result.Error.HTTPStatus == http.StatusUnauthorized {
+		return true
+	}
+	if result.Error.HTTPStatus != http.StatusForbidden {
 		return false
 	}
 	return isXAIPermissionDeniedError(result.Error)
@@ -3815,6 +3823,9 @@ func (m *Manager) disableXAIAuthForPermissionFailure(auth *Auth, resultErr *Erro
 		return
 	}
 	reason := "xAI permission denied"
+	if resultErr != nil && resultErr.HTTPStatus == http.StatusUnauthorized {
+		reason = "xAI unauthorized"
+	}
 	if resultErr != nil && strings.TrimSpace(resultErr.Message) != "" {
 		reason = resultErr.Message
 	}

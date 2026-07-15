@@ -81,6 +81,77 @@ func TestManagerMarkResult_KeepsUnknownXAI403Enabled(t *testing.T) {
 	}
 }
 
+func TestManagerMarkResult_DisablesXAIAuthForUnauthorized(t *testing.T) {
+	autoDisable := true
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{XAI: internalconfig.XAIConfig{
+		AutoDisablePermissionDenied: &autoDisable,
+	}})
+
+	auth := &Auth{
+		ID:       "xai-unauthorized",
+		Provider: "xai",
+		Metadata: map[string]any{"type": "xai"},
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	reason := `{"error":"Invalid or expired credentials (auth_kind=bearer)"}`
+	manager.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "xai",
+		Model:    "grok-4.5",
+		Success:  false,
+		Error: &Error{
+			HTTPStatus: http.StatusUnauthorized,
+			Message:    reason,
+		},
+	})
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("updated auth not found")
+	}
+	if !updated.Disabled || updated.Status != StatusDisabled {
+		t.Fatalf("auth disabled state = disabled:%t status:%s, want disabled", updated.Disabled, updated.Status)
+	}
+	if got, _ := updated.Metadata["disabled"].(bool); !got {
+		t.Fatalf("metadata disabled = %#v, want true", updated.Metadata["disabled"])
+	}
+	if got, _ := updated.Metadata["disabled_reason"].(string); got != reason {
+		t.Fatalf("disabled_reason = %q, want %q", got, reason)
+	}
+}
+
+func TestManagerMarkResult_KeepsXAIUnauthorizedWhenAutoDisableOff(t *testing.T) {
+	autoDisable := false
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{XAI: internalconfig.XAIConfig{
+		AutoDisablePermissionDenied: &autoDisable,
+	}})
+
+	auth := &Auth{ID: "xai-unauthorized-off", Provider: "xai", Metadata: map[string]any{"type": "xai"}}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	manager.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "xai",
+		Model:    "grok-4.5",
+		Success:  false,
+		Error:    &Error{HTTPStatus: http.StatusUnauthorized, Message: "Invalid or expired credentials"},
+	})
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("updated auth not found")
+	}
+	if updated.Disabled {
+		t.Fatal("xAI 401 must not disable when auto-disable-permission-denied is false")
+	}
+}
+
 func freeUsageExhaustedResult(authID, model string, retryAfter time.Duration) Result {
 	result := Result{
 		AuthID:   authID,

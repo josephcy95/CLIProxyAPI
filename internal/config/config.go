@@ -379,7 +379,8 @@ func (value CodexConfig) UsageLimitCooldownFallbackHoursValue() int {
 // XAIConfig configures xAI/Grok credential failure handling.
 type XAIConfig struct {
 	// AutoDisablePermissionDenied permanently disables an auth file when xAI returns
-	// a known permission-denied or access-denied response.
+	// a known permission-denied/access-denied response, or HTTP 401 after the one-shot
+	// OAuth refresh retry (or when no refresh credential exists).
 	AutoDisablePermissionDenied *bool `yaml:"auto-disable-permission-denied,omitempty" json:"auto-disable-permission-denied,omitempty"`
 	// OtherForbiddenCooldownHours is the model cooldown for other xAI 403 responses.
 	// Set to 0 to keep the model immediately eligible for a later request.
@@ -444,7 +445,8 @@ func NormalizeXAIConfig(value XAIConfig) XAIConfig {
 	return value
 }
 
-// AutoDisablePermissionDeniedEnabled reports whether known xAI permission failures disable auth files.
+// AutoDisablePermissionDeniedEnabled reports whether known xAI permission failures and
+// surviving HTTP 401s disable auth files.
 func (value XAIConfig) AutoDisablePermissionDeniedEnabled() bool {
 	normalized := NormalizeXAIConfig(value)
 	return normalized.AutoDisablePermissionDenied != nil && *normalized.AutoDisablePermissionDenied

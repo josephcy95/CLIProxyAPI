@@ -152,8 +152,9 @@ disable-image-generation: false
 
 # xAI/Grok credential failure handling.
 xai:
-  # Disable an auth file permanently when xAI explicitly denies chat access or permission.
-  # The returned error body is saved to the auth file as disabled_reason.
+  # Disable an auth file permanently when xAI explicitly denies chat access/permission,
+  # or when HTTP 401 remains after the one-shot OAuth refresh retry (bearer keys with no
+  # refresh credential disable immediately). Error body is saved as disabled_reason.
   auto-disable-permission-denied: true
   # Model cooldown for other xAI HTTP 403 responses. Set 0 to keep the model immediately eligible.
   other-403-cooldown-hours: 6

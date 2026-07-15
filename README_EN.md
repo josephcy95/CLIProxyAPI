@@ -12,7 +12,7 @@ I merge upstream from time to time.
 
 - Model-level cooldowns after quota / usage-limit errors; state is stored in each auth JSON and survives reloads
 - Streaming quota errors keep RetryAfter instead of collapsing into a short retry loop
-- Optional auto-disable: xAI free-usage exhaustion / unusable `403`; Codex dead auth, repeated usage-limit, `402`, `deactivated_workspace`
+- Optional auto-disable: xAI free-usage exhaustion / unusable `403` / surviving `401` (after one OAuth refresh); Codex dead auth, repeated usage-limit, `402`, `deactivated_workspace`
 - Scheduler skips credentials still in cooldown
 
 **Codex private instructions (jailbreak / custom prompts)**

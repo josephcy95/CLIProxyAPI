@@ -12,7 +12,7 @@
 
 - 额度 / usage-limit 后按模型进入 cooldown，状态写在 auth JSON 里，重载后仍保留
 - 流式请求中的额度错误会保留 RetryAfter，避免掉进短重试循环
-- 可自动禁用：xAI 反复耗尽免费额度 / 不可用 403；Codex 凭证失效、反复 usage-limit、`402`、`deactivated_workspace`
+- 可自动禁用：xAI 反复耗尽免费额度 / 不可用 403 / 刷新后仍 401；Codex 凭证失效、反复 usage-limit、`402`、`deactivated_workspace`
 - 调度会跳过仍在 cooldown 的凭证
 
 **Codex 私有指令（破限提示词）**
