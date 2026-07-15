@@ -594,7 +594,6 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	return entry
 }
 
-
 func authAllowPrivateInstructionsValue(auth *coreauth.Auth) (bool, bool) {
 	if auth == nil {
 		return false, false
@@ -638,7 +637,14 @@ func authCodexPlanType(auth *coreauth.Auth) string {
 	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return ""
 	}
+	// Prefer stored plan fields (updated by quota refresh) over JWT claims.
 	if planType := authMetadataString(auth, "plan_type"); planType != "" {
+		return planType
+	}
+	if planType := authMetadataString(auth, "chatgpt_plan_type"); planType != "" {
+		return planType
+	}
+	if planType := strings.TrimSpace(authAttribute(auth, "plan_type")); planType != "" {
 		return planType
 	}
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
@@ -646,7 +652,7 @@ func authCodexPlanType(auth *coreauth.Auth) string {
 			return strings.TrimSpace(planType)
 		}
 	}
-	return strings.TrimSpace(authAttribute(auth, "plan_type"))
+	return ""
 }
 
 func xaiAuthStatus(auth *coreauth.Auth, now time.Time) (int, time.Time) {
@@ -1810,9 +1816,32 @@ func syncAuthFileMetadataFields(auth *coreauth.Auth, touchedRoots map[string]str
 	if _, ok := touchedRoots["allow_private_instructions"]; ok {
 		syncAuthFileAllowPrivateInstructionsAttribute(auth)
 	}
+	if _, ok := touchedRoots["plan_type"]; ok {
+		syncAuthFileCodexPlanTypeAttribute(auth)
+	} else if _, ok := touchedRoots["chatgpt_plan_type"]; ok {
+		syncAuthFileCodexPlanTypeAttribute(auth)
+	}
 	if _, ok := touchedRoots["disabled"]; ok {
 		syncAuthFileDisabledState(auth)
 	}
+}
+
+func syncAuthFileCodexPlanTypeAttribute(auth *coreauth.Auth) {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	planType := authMetadataString(auth, "plan_type")
+	if planType == "" {
+		planType = authMetadataString(auth, "chatgpt_plan_type")
+	}
+	if planType == "" {
+		delete(auth.Attributes, "plan_type")
+		return
+	}
+	auth.Attributes["plan_type"] = planType
 }
 
 func syncAuthFileHeaderAttributes(auth *coreauth.Auth) {

@@ -3,6 +3,7 @@ package synthesizer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -221,17 +222,54 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	coreauth.ApplyCustomHeadersFromMetadata(a)
 	coreauth.SetOAuthModelAliasesAttribute(a, perAccountModelAliases)
 	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")
-	// For codex auth files, extract plan_type from the JWT id_token.
+	// For codex auth files: prefer stored plan_type / chatgpt_plan_type over JWT.
+	// Quota refresh can write an authoritative plan after ChatGPT downgrades while
+	// id_token chatgpt_plan_type remains stale until the next login.
 	if provider == "codex" {
-		if idTokenRaw, ok := metadata["id_token"].(string); ok && strings.TrimSpace(idTokenRaw) != "" {
-			if claims, errParse := codex.ParseJWTToken(idTokenRaw); errParse == nil && claims != nil {
-				if pt := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); pt != "" {
-					a.Attributes["plan_type"] = pt
-				}
-			}
+		if pt := codexPlanTypeFromMetadata(metadata); pt != "" {
+			a.Attributes["plan_type"] = pt
 		}
 	}
 	return []*coreauth.Auth{a}
+}
+
+// codexPlanTypeFromMetadata resolves the authoritative Codex plan type.
+// Priority: plan_type → chatgpt_plan_type → JWT chatgpt_plan_type.
+func codexPlanTypeFromMetadata(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	if pt := metadataString(metadata, "plan_type"); pt != "" {
+		return pt
+	}
+	if pt := metadataString(metadata, "chatgpt_plan_type"); pt != "" {
+		return pt
+	}
+	idTokenRaw, ok := metadata["id_token"].(string)
+	if !ok || strings.TrimSpace(idTokenRaw) == "" {
+		return ""
+	}
+	claims, errParse := codex.ParseJWTToken(idTokenRaw)
+	if errParse != nil || claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType)
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	raw, ok := metadata[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
 }
 
 func parsePluginFileAuths(parser PluginAuthParser, req pluginapi.AuthParseRequest) ([]*coreauth.Auth, bool, error) {

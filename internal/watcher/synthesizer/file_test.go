@@ -617,6 +617,75 @@ func TestFileSynthesizer_Synthesize_IgnoresGeminiOAuthFile(t *testing.T) {
 	}
 }
 
+func TestFileSynthesizer_Synthesize_CodexPlanTypePriority(t *testing.T) {
+	// Minimal JWT payload with chatgpt_plan_type=plus (unsigned, parser only needs middle segment).
+	// header.payload.sig
+	idToken := "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIn19.sig"
+
+	tests := []struct {
+		name string
+		data map[string]any
+		want string
+	}{
+		{
+			name: "stored plan_type wins over jwt plus",
+			data: map[string]any{
+				"type":      "codex",
+				"plan_type": "free",
+				"id_token":  idToken,
+			},
+			want: "free",
+		},
+		{
+			name: "chatgpt_plan_type used when plan_type missing",
+			data: map[string]any{
+				"type":              "codex",
+				"chatgpt_plan_type": "free",
+				"id_token":          idToken,
+			},
+			want: "free",
+		},
+		{
+			name: "falls back to jwt when no stored plan",
+			data: map[string]any{
+				"type":     "codex",
+				"id_token": idToken,
+			},
+			want: "plus",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			raw, errMarshal := json.Marshal(tt.data)
+			if errMarshal != nil {
+				t.Fatalf("marshal: %v", errMarshal)
+			}
+			if errWrite := os.WriteFile(filepath.Join(tempDir, "codex.json"), raw, 0o600); errWrite != nil {
+				t.Fatalf("write: %v", errWrite)
+			}
+			synth := NewFileSynthesizer()
+			ctx := &SynthesisContext{
+				Config:      &config.Config{},
+				AuthDir:     tempDir,
+				Now:         time.Now(),
+				IDGenerator: NewStableIDGenerator(),
+			}
+			auths, errSynthesize := synth.Synthesize(ctx)
+			if errSynthesize != nil {
+				t.Fatalf("unexpected error: %v", errSynthesize)
+			}
+			if len(auths) != 1 {
+				t.Fatalf("expected 1 auth, got %d", len(auths))
+			}
+			if got := auths[0].Attributes["plan_type"]; got != tt.want {
+				t.Fatalf("plan_type = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFileSynthesizer_Synthesize_NoteParsing(t *testing.T) {
 	tests := []struct {
 		name     string

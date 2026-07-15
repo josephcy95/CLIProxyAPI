@@ -212,6 +212,60 @@ func TestPatchAuthFileFields_WebsocketsFalseIsUpdate(t *testing.T) {
 	}
 }
 
+func TestPatchAuthFileFields_CodexPlanTypeSyncsAttribute(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	authDir := t.TempDir()
+	fileName := "codex-plan.json"
+	filePath := filepath.Join(authDir, fileName)
+	store := fileauth.NewFileTokenStore()
+	store.SetBaseDir(authDir)
+	manager := coreauth.NewManager(store, nil, nil)
+	record := &coreauth.Auth{
+		ID:       fileName,
+		FileName: fileName,
+		Provider: "codex",
+		Attributes: map[string]string{
+			"path":      filePath,
+			"plan_type": "plus",
+		},
+		Metadata: map[string]any{
+			"type": "codex",
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+
+	body := `{"name":"codex-plan.json","plan_type":"free","chatgpt_plan_type":"free"}`
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPatch, "/v0/management/auth-files/fields", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	h.PatchAuthFileFields(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	updated, ok := manager.GetByID(fileName)
+	if !ok || updated == nil {
+		t.Fatal("expected auth to still be registered")
+	}
+	if got := updated.Attributes["plan_type"]; got != "free" {
+		t.Fatalf("attribute plan_type = %q, want free", got)
+	}
+	if got, _ := updated.Metadata["plan_type"].(string); got != "free" {
+		t.Fatalf("metadata plan_type = %#v, want free", updated.Metadata["plan_type"])
+	}
+	if got, _ := updated.Metadata["chatgpt_plan_type"].(string); got != "free" {
+		t.Fatalf("metadata chatgpt_plan_type = %#v, want free", updated.Metadata["chatgpt_plan_type"])
+	}
+}
+
 func TestPatchAuthFileFields_ArbitraryFieldsPersistToFile(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 

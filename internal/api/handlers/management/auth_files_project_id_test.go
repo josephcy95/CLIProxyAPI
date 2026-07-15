@@ -148,6 +148,45 @@ func TestListAuthFiles_IncludesStoredCodexPlanType(t *testing.T) {
 	}
 }
 
+func TestListAuthFiles_StoredCodexPlanTypeBeatsJWT(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	authDir := t.TempDir()
+	fileName := "codex-free.json"
+	filePath := filepath.Join(authDir, fileName)
+	if errWrite := os.WriteFile(filePath, []byte(`{"type":"codex","plan_type":"free"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write auth file: %v", errWrite)
+	}
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	record := &coreauth.Auth{
+		ID:       fileName,
+		FileName: fileName,
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"path":      filePath,
+			"plan_type": "plus", // stale attribute from old JWT synthesis
+		},
+		Metadata: map[string]any{
+			"type":      "codex",
+			"plan_type": "free",
+			"id_token":  "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIn19.sig",
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+	h.tokenStore = &memoryAuthStore{}
+
+	entry := firstAuthFileEntry(t, h)
+	if got := entry["plan_type"]; got != "free" {
+		t.Fatalf("expected plan_type %q from stored field, got %#v", "free", got)
+	}
+}
+
 func TestListAuthFiles_ExposesXAIStatus(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 
