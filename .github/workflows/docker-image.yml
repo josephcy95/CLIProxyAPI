@@ -72,12 +72,25 @@ jobs:
           if [ "${tag}" = "latest" ]; then
             version="$(git describe --tags --abbrev=0)"
           fi
-          echo "IMAGE_NAME=${image_name}" >> "${GITHUB_ENV}"
-          echo "IMAGE_TAG=${tag}" >> "${GITHUB_ENV}"
-          echo "PLATFORMS=${platforms}" >> "${GITHUB_ENV}"
-          echo "VERSION=${version}" >> "${GITHUB_ENV}"
-          echo "COMMIT=${commit}" >> "${GITHUB_ENV}"
-          echo "BUILD_DATE=${build_date}" >> "${GITHUB_ENV}"
+
+          # One build, multiple tags: primary tag + commit short SHA.
+          # Version tags (v*) also move :latest so release + latest share one digest.
+          tags="${image_name}:${tag}"$'\n'"${image_name}:${commit}"
+          if [[ "${tag}" == v* ]]; then
+            tags+=$'\n'"${image_name}:latest"
+          fi
+
+          {
+            echo "IMAGE_NAME=${image_name}"
+            echo "IMAGE_TAG=${tag}"
+            echo "PLATFORMS=${platforms}"
+            echo "VERSION=${version}"
+            echo "COMMIT=${commit}"
+            echo "BUILD_DATE=${build_date}"
+            echo "IMAGE_TAGS<<EOF"
+            printf '%s\n' "${tags}"
+            echo "EOF"
+          } >> "${GITHUB_ENV}"
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -89,11 +102,9 @@ jobs:
             VERSION=${{ env.VERSION }}
             COMMIT=${{ env.COMMIT }}
             BUILD_DATE=${{ env.BUILD_DATE }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            ${{ env.IMAGE_NAME }}:${{ env.COMMIT }}
+          tags: ${{ env.IMAGE_TAGS }}
 
       - name: Print image
         run: |
-          echo "Published ${IMAGE_NAME}:${IMAGE_TAG}"
-          echo "Published ${IMAGE_NAME}:${COMMIT}"
+          echo "Published tags:"
+          printf '%s\n' "${IMAGE_TAGS}"
