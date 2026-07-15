@@ -403,3 +403,48 @@ func (h *Handler) DeleteModelPrice(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
+
+// PostModelPricesSync fetches LiteLLM + OpenRouter catalogs, auto-imports
+// exact/unique matches for models seen in usage (or body.models), and returns
+// fuzzy candidates that need user confirmation.
+//
+// Body (all optional):
+//
+//	{
+//	  "models": ["optional", "override", "list"],
+//	  "override_manual": false,
+//	  "apply_matched": true
+//	}
+//
+// apply_matched defaults to true when omitted.
+func (h *Handler) PostModelPricesSync(c *gin.Context) {
+	store := h.requireUsageStore(c)
+	if store == nil {
+		return
+	}
+	var body struct {
+		Models         []string `json:"models"`
+		OverrideManual bool     `json:"override_manual"`
+		ApplyMatched   *bool    `json:"apply_matched"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+			return
+		}
+	}
+	apply := true
+	if body.ApplyMatched != nil {
+		apply = *body.ApplyMatched
+	}
+	result, err := store.SyncModelPrices(c.Request.Context(), usagestore.PriceSyncRequest{
+		Models:         body.Models,
+		OverrideManual: body.OverrideManual,
+		ApplyMatched:   apply,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}

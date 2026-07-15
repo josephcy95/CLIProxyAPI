@@ -890,6 +890,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/model-price-aliases", s.mgmt.PutModelPriceAliases)
 		mgmt.PATCH("/model-price-aliases", s.mgmt.PutModelPriceAliases)
 		mgmt.DELETE("/model-price-aliases", s.mgmt.DeleteModelPriceAlias)
+		mgmt.POST("/model-prices/sync", s.mgmt.PostModelPricesSync)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
