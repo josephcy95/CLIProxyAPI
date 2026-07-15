@@ -51,26 +51,9 @@ func HashSecret(value string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// MaskSource redacts emails and long tokens for display while keeping a hint.
+// MaskSource returns the trimmed source as-is (management UI shows full emails / keys).
 func MaskSource(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if strings.Contains(value, "@") {
-		parts := strings.SplitN(value, "@", 2)
-		local := parts[0]
-		domain := parts[1]
-		if utf8.RuneCountInString(local) <= 2 {
-			return local[:1] + "***@" + domain
-		}
-		runes := []rune(local)
-		return string(runes[:2]) + "***@" + domain
-	}
-	if len(value) <= 8 {
-		return value[:1] + "***"
-	}
-	return value[:4] + "***" + value[len(value)-2:]
+	return strings.TrimSpace(value)
 }
 
 // SummarizeFailBody produces a short, non-sensitive failure summary.

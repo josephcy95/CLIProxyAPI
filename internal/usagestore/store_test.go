@@ -21,12 +21,12 @@ func TestStoreInsertListSummaryAndPricing(t *testing.T) {
 	events := []Event{
 		{
 			TimestampMS: now - 1000, Model: "brand-gpt-5.5", Alias: "brand-gpt-5.5", Provider: "openai-compatibility",
-			Source: "ab***@example.com", SourceHash: HashSecret("abc@example.com"), AuthIndex: "auth-1",
+			Source: "abc@example.com", SourceHash: HashSecret("abc@example.com"), AuthIndex: "auth-1",
 			InputTokens: 1000, OutputTokens: 500, TotalTokens: 1500, LatencyMS: &lat, TTFTMS: &ttft, Failed: false,
 		},
 		{
 			TimestampMS: now, Model: "brand-gpt-5.5", Provider: "openai-compatibility",
-			Source: "ab***@example.com", SourceHash: HashSecret("abc@example.com"), AuthIndex: "auth-1",
+			Source: "abc@example.com", SourceHash: HashSecret("abc@example.com"), AuthIndex: "auth-1",
 			InputTokens: 200, OutputTokens: 50, TotalTokens: 250, Failed: true, FailStatusCode: 429, FailSummary: "rate limited",
 		},
 	}
@@ -97,8 +97,8 @@ func TestStoreInsertListSummaryAndPricing(t *testing.T) {
 }
 
 func TestMaskAndHash(t *testing.T) {
-	if got := MaskSource("alice@example.com"); got == "alice@example.com" || !contains(got, "@example.com") {
-		t.Fatalf("mask email = %q", got)
+	if got := MaskSource("alice@example.com"); got != "alice@example.com" {
+		t.Fatalf("source = %q, want full email", got)
 	}
 	if HashSecret("sk-secret") == "" || HashSecret("sk-secret") == "sk-secret" {
 		t.Fatalf("hash should be non-empty and not raw")

@@ -155,7 +155,7 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 		Endpoint:            endpoint,
 		AuthType:            authType,
 		AuthIndex:           strings.TrimSpace(record.AuthIndex),
-		Source:              MaskSource(sourceRaw),
+		Source:              sourceRaw,
 		SourceHash:          HashSecret(sourceRaw),
 		APIKeyHash:          HashSecret(apiKey),
 		ReasoningEffort:     reasoningEffort,
