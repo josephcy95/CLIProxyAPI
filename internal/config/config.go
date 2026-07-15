@@ -73,6 +73,15 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// UsageStorePath is the SQLite path for durable request monitoring events and prices.
+	// Relative paths resolve against the process working directory (Docker: /CLIProxyAPI).
+	// Default: data/usage.db
+	UsageStorePath string `yaml:"usage-store-path" json:"usage-store-path"`
+
+	// UsageRetentionDays controls how long durable usage events are kept.
+	// Default: 30. Set to 0 to use the default.
+	UsageRetentionDays int `yaml:"usage-retention-days" json:"usage-retention-days"`
+
 	// RedisUsageQueueRetentionSeconds controls how long usage queue items are retained
 	// in memory for Management API consumers.
 	// Default: 60. Max: 3600.

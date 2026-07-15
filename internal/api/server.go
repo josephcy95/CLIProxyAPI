@@ -37,6 +37,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/safemode"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/usagestore"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
@@ -372,6 +373,12 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		s.mgmt.SetPostAuthPersistHook(optionState.postAuthPersistHook)
 	}
 	s.localPassword = optionState.localPassword
+	// Durable usage store for request monitoring (fan-out from usage plugins).
+	if store, errUsage := usagestore.Configure(cfg.UsageStorePath, cfg.UsageRetentionDays, cfg.UsageStatisticsEnabled); errUsage != nil {
+		log.Errorf("failed to open usage store: %v", errUsage)
+	} else if store != nil {
+		s.mgmt.SetUsageStore(store)
+	}
 
 	// Home heartbeat gate: when home is enabled, block all endpoints with 503 until the
 	// subscribe-config heartbeat connection is healthy.
@@ -866,6 +873,23 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyUsage)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
+
+		// Durable request monitoring (SQLite-backed; non-destructive reads).
+		mgmt.GET("/usage-events", s.mgmt.GetUsageEvents)
+		mgmt.POST("/usage-events", s.mgmt.GetUsageEvents)
+		mgmt.GET("/usage-summary", s.mgmt.GetUsageSummary)
+		mgmt.POST("/usage-summary", s.mgmt.GetUsageSummary)
+		mgmt.GET("/usage-filter-options", s.mgmt.GetUsageFilterOptions)
+		mgmt.POST("/usage-filter-options", s.mgmt.GetUsageFilterOptions)
+		mgmt.GET("/usage-account-stats", s.mgmt.GetUsageAccountStats)
+		mgmt.POST("/usage-account-stats", s.mgmt.GetUsageAccountStats)
+		mgmt.GET("/model-prices", s.mgmt.GetModelPrices)
+		mgmt.PUT("/model-prices", s.mgmt.PutModelPrices)
+		mgmt.PATCH("/model-prices", s.mgmt.PutModelPrices)
+		mgmt.DELETE("/model-prices", s.mgmt.DeleteModelPrice)
+		mgmt.PUT("/model-price-aliases", s.mgmt.PutModelPriceAliases)
+		mgmt.PATCH("/model-price-aliases", s.mgmt.PutModelPriceAliases)
+		mgmt.DELETE("/model-price-aliases", s.mgmt.DeleteModelPriceAlias)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
@@ -1852,10 +1876,22 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	if oldCfg == nil || oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
 		redisqueue.SetUsageStatisticsEnabled(cfg.UsageStatisticsEnabled)
+		usagestore.SetEnabled(cfg.UsageStatisticsEnabled)
 	}
 
 	if oldCfg == nil || oldCfg.RedisUsageQueueRetentionSeconds != cfg.RedisUsageQueueRetentionSeconds {
 		redisqueue.SetRetentionSeconds(cfg.RedisUsageQueueRetentionSeconds)
+	}
+
+	if oldCfg == nil ||
+		oldCfg.UsageStorePath != cfg.UsageStorePath ||
+		oldCfg.UsageRetentionDays != cfg.UsageRetentionDays ||
+		oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
+		if store, errUsage := usagestore.Configure(cfg.UsageStorePath, cfg.UsageRetentionDays, cfg.UsageStatisticsEnabled); errUsage != nil {
+			log.Errorf("failed to reconfigure usage store: %v", errUsage)
+		} else if s.mgmt != nil {
+			s.mgmt.SetUsageStore(store)
+		}
 	}
 
 	if s.requestLogger != nil && (oldCfg == nil || oldCfg.ErrorLogsMaxFiles != cfg.ErrorLogsMaxFiles) {

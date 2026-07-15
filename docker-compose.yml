@@ -25,4 +25,6 @@ services:
       - ${CLI_PROXY_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
+      # Durable request monitoring DB (usage.db, model prices/aliases)
+      - ${CLI_PROXY_DATA_PATH:-./data}:/CLIProxyAPI/data
     restart: unless-stopped
