@@ -49,6 +49,7 @@ type usageQueryBody struct {
 	Providers    []string `json:"providers"`
 	AuthIndices  []string `json:"auth_indices"`
 	Sources      []string `json:"sources"`
+	APIKeys      []string `json:"api_keys"`
 	APIKeyHashes []string `json:"api_key_hashes"`
 	FailedOnly   bool     `json:"failed_only"`
 	SuccessOnly  bool     `json:"success_only"`
@@ -66,6 +67,7 @@ func parseUsageFilter(c *gin.Context, body *usageQueryBody) usagestore.QueryFilt
 		filter.Providers = body.Providers
 		filter.AuthIndices = body.AuthIndices
 		filter.Sources = body.Sources
+		filter.APIKeys = body.APIKeys
 		filter.APIKeyHashes = body.APIKeyHashes
 		filter.FailedOnly = body.FailedOnly
 		filter.SuccessOnly = body.SuccessOnly
@@ -113,6 +115,9 @@ func parseUsageFilter(c *gin.Context, body *usageQueryBody) usagestore.QueryFilt
 	}
 	if v := c.Query("sources"); v != "" {
 		filter.Sources = splitCSV(v)
+	}
+	if v := c.Query("api_keys"); v != "" {
+		filter.APIKeys = splitCSV(v)
 	}
 	if v := c.Query("api_key_hashes"); v != "" {
 		filter.APIKeyHashes = splitCSV(v)
@@ -172,10 +177,10 @@ func (h *Handler) GetUsageEvents(c *gin.Context) {
 		nextBeforeID = events[len(events)-1].ID
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"events":         events,
-		"next_before_id": nextBeforeID,
+		"events":          events,
+		"next_before_id":  nextBeforeID,
 		"generated_at_ms": time.Now().UnixMilli(),
-		"store_path":     store.Path(),
+		"store_path":      store.Path(),
 	})
 }
 
@@ -211,8 +216,8 @@ func (h *Handler) GetUsageSummary(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"summary":         summary,
-		"generated_at_ms": time.Now().UnixMilli(),
+		"summary":                  summary,
+		"generated_at_ms":          time.Now().UnixMilli(),
 		"usage_statistics_enabled": h.cfg != nil && h.cfg.UsageStatisticsEnabled,
 	})
 }

@@ -206,6 +206,7 @@ func migrate(db *sql.DB) error {
 			auth_index TEXT,
 			source TEXT,
 			source_hash TEXT,
+			api_key TEXT,
 			api_key_hash TEXT,
 			reasoning_effort TEXT,
 			service_tier TEXT,
@@ -251,6 +252,16 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("usagestore: migrate: %w", err)
 		}
 	}
+	// Older DBs lack api_key; ignore duplicate-column errors.
+	if _, err := db.Exec(`ALTER TABLE usage_events ADD COLUMN api_key TEXT`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return fmt.Errorf("usagestore: migrate api_key: %w", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_events_api_key ON usage_events(api_key)`); err != nil {
+		return fmt.Errorf("usagestore: migrate api_key index: %w", err)
+	}
 	return nil
 }
 
@@ -266,12 +277,12 @@ func (s *Store) insertBatch(ctx context.Context, events []Event) error {
 
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO usage_events (
 		timestamp_ms, request_id, provider, executor_type, model, alias, endpoint,
-		auth_type, auth_index, source, source_hash, api_key_hash,
+		auth_type, auth_index, source, source_hash, api_key, api_key_hash,
 		reasoning_effort, service_tier, response_service_tier,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens,
 		cache_read_tokens, cache_creation_tokens, total_tokens,
 		latency_ms, ttft_ms, failed, fail_status_code, fail_summary, created_at_ms
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -299,7 +310,8 @@ func (s *Store) insertBatch(ctx context.Context, events []Event) error {
 		if _, err := stmt.ExecContext(ctx,
 			e.TimestampMS, nullStr(e.RequestID), nullStr(e.Provider), nullStr(e.ExecutorType),
 			nullStr(e.Model), nullStr(e.Alias), nullStr(e.Endpoint),
-			nullStr(e.AuthType), nullStr(e.AuthIndex), nullStr(e.Source), nullStr(e.SourceHash), nullStr(e.APIKeyHash),
+			nullStr(e.AuthType), nullStr(e.AuthIndex), nullStr(e.Source), nullStr(e.SourceHash),
+			nullStr(e.APIKey), nullStr(e.APIKeyHash),
 			nullStr(e.ReasoningEffort), nullStr(e.ServiceTier), nullStr(e.ResponseServiceTier),
 			e.InputTokens, e.OutputTokens, e.ReasoningTokens, e.CachedTokens,
 			e.CacheReadTokens, e.CacheCreationTokens, e.TotalTokens,

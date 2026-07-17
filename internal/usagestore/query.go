@@ -16,6 +16,7 @@ type QueryFilter struct {
 	Providers    []string
 	AuthIndices  []string
 	Sources      []string
+	APIKeys      []string
 	APIKeyHashes []string
 	FailedOnly   bool
 	SuccessOnly  bool
@@ -63,6 +64,7 @@ type FilterOptions struct {
 	Providers    []string `json:"providers"`
 	AuthIndices  []string `json:"auth_indices"`
 	Sources      []string `json:"sources"`
+	APIKeys      []string `json:"api_keys"`
 	APIKeyHashes []string `json:"api_key_hashes"`
 }
 
@@ -118,6 +120,7 @@ func buildWhere(f QueryFilter) (string, []any) {
 	appendIn("provider", f.Providers)
 	appendIn("auth_index", f.AuthIndices)
 	appendIn("source", f.Sources)
+	appendIn("api_key", f.APIKeys)
 	appendIn("api_key_hash", f.APIKeyHashes)
 
 	search := strings.TrimSpace(f.Search)
@@ -125,10 +128,11 @@ func buildWhere(f QueryFilter) (string, []any) {
 		like := "%" + search + "%"
 		clauses = append(clauses, `(
 			IFNULL(model,'') LIKE ? OR IFNULL(alias,'') LIKE ? OR IFNULL(provider,'') LIKE ? OR
-			IFNULL(source,'') LIKE ? OR IFNULL(auth_index,'') LIKE ? OR IFNULL(api_key_hash,'') LIKE ? OR
-			IFNULL(endpoint,'') LIKE ? OR IFNULL(request_id,'') LIKE ? OR IFNULL(reasoning_effort,'') LIKE ?
+			IFNULL(source,'') LIKE ? OR IFNULL(auth_index,'') LIKE ? OR IFNULL(api_key,'') LIKE ? OR
+			IFNULL(api_key_hash,'') LIKE ? OR IFNULL(endpoint,'') LIKE ? OR IFNULL(request_id,'') LIKE ? OR
+			IFNULL(reasoning_effort,'') LIKE ?
 		)`)
-		for i := 0; i < 9; i++ {
+		for i := 0; i < 10; i++ {
 			args = append(args, like)
 		}
 	}
@@ -147,7 +151,7 @@ func (s *Store) ListEvents(ctx context.Context, filter QueryFilter) ([]Event, er
 	where, args := buildWhere(filter)
 	query := `SELECT id, timestamp_ms, IFNULL(request_id,''), IFNULL(provider,''), IFNULL(executor_type,''),
 		IFNULL(model,''), IFNULL(alias,''), IFNULL(endpoint,''), IFNULL(auth_type,''), IFNULL(auth_index,''),
-		IFNULL(source,''), IFNULL(source_hash,''), IFNULL(api_key_hash,''), IFNULL(reasoning_effort,''),
+		IFNULL(source,''), IFNULL(source_hash,''), IFNULL(api_key,''), IFNULL(api_key_hash,''), IFNULL(reasoning_effort,''),
 		IFNULL(service_tier,''), IFNULL(response_service_tier,''),
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
 		latency_ms, ttft_ms, failed, IFNULL(fail_status_code,0), IFNULL(fail_summary,''), created_at_ms
@@ -167,7 +171,7 @@ func (s *Store) ListEvents(ctx context.Context, filter QueryFilter) ([]Event, er
 		if err := rows.Scan(
 			&e.ID, &e.TimestampMS, &e.RequestID, &e.Provider, &e.ExecutorType,
 			&e.Model, &e.Alias, &e.Endpoint, &e.AuthType, &e.AuthIndex,
-			&e.Source, &e.SourceHash, &e.APIKeyHash, &e.ReasoningEffort,
+			&e.Source, &e.SourceHash, &e.APIKey, &e.APIKeyHash, &e.ReasoningEffort,
 			&e.ServiceTier, &e.ResponseServiceTier,
 			&e.InputTokens, &e.OutputTokens, &e.ReasoningTokens, &e.CachedTokens,
 			&e.CacheReadTokens, &e.CacheCreationTokens, &e.TotalTokens,
@@ -289,6 +293,7 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 	base.Providers = nil
 	base.AuthIndices = nil
 	base.Sources = nil
+	base.APIKeys = nil
 	base.APIKeyHashes = nil
 	base.FailedOnly = false
 	base.SuccessOnly = false
@@ -329,6 +334,9 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 		return out, err
 	}
 	if out.Sources, err = load("source"); err != nil {
+		return out, err
+	}
+	if out.APIKeys, err = load("api_key"); err != nil {
 		return out, err
 	}
 	if out.APIKeyHashes, err = load("api_key_hash"); err != nil {

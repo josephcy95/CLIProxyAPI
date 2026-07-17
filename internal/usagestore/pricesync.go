@@ -20,11 +20,11 @@ const (
 	defaultLiteLLMURL    = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 	defaultOpenRouterURL = "https://openrouter.ai/api/v1/models"
 
-	maxSyncCandidates      = 8
-	minCandidateScore      = 0.55
-	minWeakCandidateScore  = 0.34
-	priceSyncHTTPTimeout   = 45 * time.Second
-	maxPriceSyncBodyBytes  = 32 << 20
+	maxSyncCandidates     = 8
+	minCandidateScore     = 0.55
+	minWeakCandidateScore = 0.34
+	priceSyncHTTPTimeout  = 45 * time.Second
+	maxPriceSyncBodyBytes = 32 << 20
 )
 
 // PriceSyncRequest selects which local models to match against remote catalogs.

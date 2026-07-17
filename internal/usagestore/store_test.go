@@ -22,11 +22,13 @@ func TestStoreInsertListSummaryAndPricing(t *testing.T) {
 		{
 			TimestampMS: now - 1000, Model: "brand-gpt-5.5", Alias: "brand-gpt-5.5", Provider: "openai-compatibility",
 			Source: "abc@example.com", SourceHash: HashSecret("abc@example.com"), AuthIndex: "auth-1",
+			APIKey: "sk-app-one", APIKeyHash: HashSecret("sk-app-one"),
 			InputTokens: 1000, OutputTokens: 500, TotalTokens: 1500, LatencyMS: &lat, TTFTMS: &ttft, Failed: false,
 		},
 		{
 			TimestampMS: now, Model: "brand-gpt-5.5", Provider: "openai-compatibility",
 			Source: "abc@example.com", SourceHash: HashSecret("abc@example.com"), AuthIndex: "auth-1",
+			APIKey: "sk-app-two", APIKeyHash: HashSecret("sk-app-two"),
 			InputTokens: 200, OutputTokens: 50, TotalTokens: 250, Failed: true, FailStatusCode: 429, FailSummary: "rate limited",
 		},
 	}
@@ -46,6 +48,25 @@ func TestStoreInsertListSummaryAndPricing(t *testing.T) {
 	}
 	if listed[0].Failed != true {
 		t.Fatalf("newest event should be failed")
+	}
+	if listed[0].APIKey != "sk-app-two" {
+		t.Fatalf("newest api_key = %q, want sk-app-two", listed[0].APIKey)
+	}
+
+	filtered, err := store.ListEvents(context.Background(), QueryFilter{APIKeys: []string{"sk-app-one"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListEvents api_keys: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].APIKey != "sk-app-one" {
+		t.Fatalf("api_key filter = %#v", filtered)
+	}
+
+	opts, err := store.GetFilterOptions(context.Background(), QueryFilter{})
+	if err != nil {
+		t.Fatalf("GetFilterOptions: %v", err)
+	}
+	if len(opts.APIKeys) != 2 {
+		t.Fatalf("api_keys options = %#v", opts.APIKeys)
 	}
 
 	summary, err := store.GetSummary(context.Background(), QueryFilter{})

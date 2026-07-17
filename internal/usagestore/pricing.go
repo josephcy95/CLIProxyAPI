@@ -9,14 +9,14 @@ import (
 
 // ModelPrice is the per-1M token rate book entry.
 type ModelPrice struct {
-	Model            string  `json:"model"`
-	PromptPer1M      float64 `json:"prompt_per_1m"`
-	CompletionPer1M  float64 `json:"completion_per_1m"`
-	CachePer1M       float64 `json:"cache_per_1m,omitempty"`
-	CacheReadPer1M   float64 `json:"cache_read_per_1m,omitempty"`
+	Model              string  `json:"model"`
+	PromptPer1M        float64 `json:"prompt_per_1m"`
+	CompletionPer1M    float64 `json:"completion_per_1m"`
+	CachePer1M         float64 `json:"cache_per_1m,omitempty"`
+	CacheReadPer1M     float64 `json:"cache_read_per_1m,omitempty"`
 	CacheCreationPer1M float64 `json:"cache_creation_per_1m,omitempty"`
-	Source           string  `json:"source,omitempty"`
-	UpdatedAtMS      int64   `json:"updated_at_ms,omitempty"`
+	Source             string  `json:"source,omitempty"`
+	UpdatedAtMS        int64   `json:"updated_at_ms,omitempty"`
 }
 
 // ModelPriceAlias maps a request model string to a priced model id.

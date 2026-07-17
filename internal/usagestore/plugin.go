@@ -157,6 +157,7 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 		AuthIndex:           strings.TrimSpace(record.AuthIndex),
 		Source:              sourceRaw,
 		SourceHash:          HashSecret(sourceRaw),
+		APIKey:              apiKey,
 		APIKeyHash:          HashSecret(apiKey),
 		ReasoningEffort:     reasoningEffort,
 		ServiceTier:         serviceTier,
