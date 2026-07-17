@@ -543,8 +543,9 @@ func TestManagerSelectAuthByKindReturnsErrorWhenUnavailable(t *testing.T) {
 		t.Fatalf("SelectAuthByKind() auth = %#v, want nil", selected)
 	}
 	var authErr *Error
-	if !errors.As(errSelect, &authErr) || authErr.Code != "auth_not_found" {
-		t.Fatalf("SelectAuthByKind() error = %#v, want auth_not_found", errSelect)
+	// Candidates exist for the provider but none match the required kind after filtering.
+	if !errors.As(errSelect, &authErr) || authErr.Code != "auth_unavailable" {
+		t.Fatalf("SelectAuthByKind() error = %#v, want auth_unavailable", errSelect)
 	}
 }
 
