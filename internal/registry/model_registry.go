@@ -796,12 +796,14 @@ func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
 	return false
 }
 
-// GetAvailableModels returns all models that have at least one available client
+// GetAvailableModels returns all models that have at least one registered client.
+// Suspended and quota-cooldown clients still count for discovery so model IDs remain
+// visible for auto-discovery even when every current auth is temporarily unavailable.
 // Parameters:
 //   - handlerType: The handler type to filter models for (e.g., "openai", "claude", "gemini")
 //
 // Returns:
-//   - []map[string]any: List of available models in the requested format
+//   - []map[string]any: List of registered models in the requested format
 func (r *ModelRegistry) GetAvailableModels(handlerType string) []map[string]any {
 	now := time.Now()
 
@@ -835,44 +837,25 @@ func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.
 	var expiresAt time.Time
 
 	for _, registration := range r.models {
-		availableClients := registration.Count
+		// Keep registered models discoverable even when every client is suspended
+		// or on quota cooldown. Runtime routing still uses per-client availability.
+		if registration.Count <= 0 {
+			continue
+		}
 
-		expiredClients := 0
 		for _, quotaTime := range registration.QuotaExceededClients {
 			if quotaTime == nil {
 				continue
 			}
 			recoveryAt := quotaTime.Add(modelQuotaExceededWindow)
-			if now.Before(recoveryAt) {
-				expiredClients++
-				if expiresAt.IsZero() || recoveryAt.Before(expiresAt) {
-					expiresAt = recoveryAt
-				}
+			if now.Before(recoveryAt) && (expiresAt.IsZero() || recoveryAt.Before(expiresAt)) {
+				expiresAt = recoveryAt
 			}
 		}
 
-		cooldownSuspended := 0
-		otherSuspended := 0
-		if registration.SuspendedClients != nil {
-			for _, reason := range registration.SuspendedClients {
-				if strings.EqualFold(reason, "quota") {
-					cooldownSuspended++
-					continue
-				}
-				otherSuspended++
-			}
-		}
-
-		effectiveClients := availableClients - expiredClients - otherSuspended
-		if effectiveClients < 0 {
-			effectiveClients = 0
-		}
-
-		if effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0) {
-			model := r.convertModelToMap(registration.Info, handlerType)
-			if model != nil {
-				models = append(models, model)
-			}
+		model := r.convertModelToMap(registration.Info, handlerType)
+		if model != nil {
+			models = append(models, model)
 		}
 	}
 
@@ -916,12 +899,13 @@ func cloneModelMapValue(value any) any {
 	}
 }
 
-// GetAvailableModelsByProvider returns models available for the given provider identifier.
+// GetAvailableModelsByProvider returns models registered for the given provider identifier.
+// Suspended and quota-cooldown clients still count for discovery.
 // Parameters:
 //   - provider: Provider identifier (e.g., "codex", "gemini", "antigravity")
 //
 // Returns:
-//   - []*ModelInfo: List of available models for the provider
+//   - []*ModelInfo: List of registered models for the provider
 func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelInfo {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
@@ -977,63 +961,21 @@ func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelIn
 		return nil
 	}
 
-	now := time.Now()
 	result := make([]*ModelInfo, 0, len(providerModels))
 
 	for modelID, entry := range providerModels {
 		if entry == nil || entry.count <= 0 {
 			continue
 		}
+		// Keep provider models discoverable even when every client is suspended
+		// or on quota cooldown. Runtime routing still uses per-client availability.
 		registration, ok := r.models[modelID]
-
-		expiredClients := 0
-		cooldownSuspended := 0
-		otherSuspended := 0
-		if ok && registration != nil {
-			if registration.QuotaExceededClients != nil {
-				for clientID, quotaTime := range registration.QuotaExceededClients {
-					if clientID == "" {
-						continue
-					}
-					if p, okProvider := r.clientProviders[clientID]; !okProvider || p != provider {
-						continue
-					}
-					if quotaTime != nil && now.Sub(*quotaTime) < modelQuotaExceededWindow {
-						expiredClients++
-					}
-				}
-			}
-			if registration.SuspendedClients != nil {
-				for clientID, reason := range registration.SuspendedClients {
-					if clientID == "" {
-						continue
-					}
-					if p, okProvider := r.clientProviders[clientID]; !okProvider || p != provider {
-						continue
-					}
-					if strings.EqualFold(reason, "quota") {
-						cooldownSuspended++
-						continue
-					}
-					otherSuspended++
-				}
-			}
+		if entry.info != nil {
+			result = append(result, cloneModelInfo(entry.info))
+			continue
 		}
-
-		availableClients := entry.count
-		effectiveClients := availableClients - expiredClients - otherSuspended
-		if effectiveClients < 0 {
-			effectiveClients = 0
-		}
-
-		if effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0) {
-			if entry.info != nil {
-				result = append(result, cloneModelInfo(entry.info))
-				continue
-			}
-			if ok && registration != nil && registration.Info != nil {
-				result = append(result, cloneModelInfo(registration.Info))
-			}
+		if ok && registration != nil && registration.Info != nil {
+			result = append(result, cloneModelInfo(registration.Info))
 		}
 	}
 

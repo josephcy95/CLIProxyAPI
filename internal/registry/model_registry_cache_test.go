@@ -88,13 +88,41 @@ func TestGetAvailableModelsInvalidatesCacheOnRegistryChanges(t *testing.T) {
 
 	r.SuspendClientModel("client-1", "m1", "manual")
 	models = r.GetAvailableModels("openai")
-	if len(models) != 0 {
-		t.Fatalf("expected no available models after suspension, got %d", len(models))
+	if len(models) != 1 {
+		t.Fatalf("expected suspended model to stay listed for discovery, got %d", len(models))
+	}
+	if got := models[0]["id"]; got != "m1" {
+		t.Fatalf("expected model id m1 after suspension, got %v", got)
 	}
 
 	r.ResumeClientModel("client-1", "m1")
 	models = r.GetAvailableModels("openai")
 	if len(models) != 1 {
-		t.Fatalf("expected model to reappear after resume, got %d", len(models))
+		t.Fatalf("expected model to remain listed after resume, got %d", len(models))
+	}
+}
+
+func TestGetAvailableModelsListsRegisteredEvenWhenAllClientsSuspended(t *testing.T) {
+	r := newTestModelRegistry()
+	r.RegisterClient("client-1", "openai", []*ModelInfo{{ID: "m1", DisplayName: "Model One"}})
+	r.RegisterClient("client-2", "openai", []*ModelInfo{{ID: "m1", DisplayName: "Model One"}})
+
+	r.SuspendClientModel("client-1", "m1", "auth_failure")
+	r.SuspendClientModel("client-2", "m1", "usage_limit")
+
+	models := r.GetAvailableModels("openai")
+	if len(models) != 1 {
+		t.Fatalf("expected registered model listed when all clients suspended, got %d", len(models))
+	}
+	if got := models[0]["id"]; got != "m1" {
+		t.Fatalf("expected model id m1, got %v", got)
+	}
+
+	byProvider := r.GetAvailableModelsByProvider("openai")
+	if len(byProvider) != 1 {
+		t.Fatalf("expected provider listing to keep suspended model, got %d", len(byProvider))
+	}
+	if byProvider[0] == nil || byProvider[0].ID != "m1" {
+		t.Fatalf("expected provider model id m1, got %+v", byProvider[0])
 	}
 }
