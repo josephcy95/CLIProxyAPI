@@ -12,8 +12,8 @@ services:
     container_name: cli-proxy-api
     environment:
       DEPLOY: ${DEPLOY:-}
-      # Optional override; image default is /data
-      # CLIPROXY_DATA_DIR: /data
+      # Optional; image default is already /data
+      CLIPROXY_DATA_DIR: ${CLIPROXY_DATA_DIR:-/data}
     ports:
       - "8317:8317"
       - "8085:8085"
@@ -22,6 +22,8 @@ services:
       - "51121:51121"
       - "11451:11451"
     volumes:
-      # Single persistent volume: config.yaml, auths/, logs/, plugins/, usage.db
+      # Single mount (unlike upstream multi-volume config/auths/logs).
+      # Host layout under CLI_PROXY_DATA_PATH:
+      #   config.yaml  auths/  logs/  plugins/  usage.db
       - ${CLI_PROXY_DATA_PATH:-./data}:/data
     restart: unless-stopped
