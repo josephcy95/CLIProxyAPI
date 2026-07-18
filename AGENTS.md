@@ -3,7 +3,32 @@
 Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with OAuth and round-robin load balancing.
 
 ## Repository
-- GitHub: https://github.com/router-for-me/CLIProxyAPI
+- **Origin (this fork, push/release):** https://github.com/josephcy95/CLIProxyAPI (`origin`)
+- **Upstream:** https://github.com/router-for-me/CLIProxyAPI (`upstream`)
+- Tags / releases are published on **josephcy95** only. Use `gh -R josephcy95/CLIProxyAPI` when default remote context is wrong.
+- Docker image: `ghcr.io/josephcy95/cli-proxy-api` (`:latest` + version on `v*` tag workflows).
+
+## Fork policies
+
+### Upstream sync
+- Prefer full merge of upstream release tags / `upstream/main` so the fork is not left “N commits behind”.
+- On conflicts: keep fork features; take the more robust upstream fix; combine when both apply.
+- After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
+
+### Fork features to preserve (do not silently drop)
+- xAI auto-disable after surviving 401 (and permission-denied 403 path) when config enabled
+- Codex auto-disable / exhaustion handling and related failure policy
+- Usage monitoring: store full client `api_key` (+ hash), filter/options/search
+- Distinct auth scheduler behavior where fork intentionally differs (e.g. `auth_unavailable` when candidates exist)
+- Single data root (`CLIPROXY_DATA_DIR`, default `/data`): config/auths/logs/plugins/usage.db under one mount
+- Primary Chinese README / fork README choices; do not reintroduce removed promo assets without ask
+
+### Ship policy
+See workspace parent `../AGENTS.md` if present. In short:
+- **Minor** → no push/tag/release unless asked (commit only if needed).
+- **Medium** → commit when done; offer push/release.
+- **Meaningful** (upstream merge, user-facing/deploy-blocking, multi-file feature) → push + tag + release + docker tags.
+- Version tags: next fork `v7.2.x` (may exceed upstream numbers on origin only).
 
 ## Commands
 ```bash
@@ -17,9 +42,11 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
 ## Config
-- Default config: `config.yaml` (template: `config.example.yaml`)
-- `.env` is auto-loaded from the working directory
-- Auth material defaults under `auths/`
+- Data root: `CLIPROXY_DATA_DIR` / `CLI_PROXY_DATA_DIR` (default `/data`)
+- Default config: `$DATA/config.yaml` (template: `config.example.yaml`; Docker entrypoint seeds if missing)
+- `.env` loaded from data root first, then working directory
+- Auth / logs / plugins / usage: `$DATA/auths`, `$DATA/logs`, `$DATA/plugins`, `$DATA/usage.db`
+- Docker: single volume host→`/data` (do not mount over `/CLIProxyAPI`)
 - Storage backends: file-based default; optional Postgres/git/object store (`PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`)
 
 ## Architecture

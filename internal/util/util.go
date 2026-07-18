@@ -72,11 +72,10 @@ func SetLogLevel(cfg *config.Config) {
 }
 
 // ResolveAuthDir normalizes the auth directory path for consistent reuse throughout the app.
-// It expands a leading tilde (~) to the user's home directory and returns a cleaned path.
-// If authDir is empty, it defaults to ~/.cli-proxy-api.
+// Empty defaults to DataDir/auths. Relative paths are under DataDir. Leading ~ expands to home.
 func ResolveAuthDir(authDir string) (string, error) {
 	if authDir == "" {
-		authDir = config.DefaultAuthDir
+		return AuthDirPath(), nil
 	}
 	if strings.HasPrefix(authDir, "~") {
 		home, err := os.UserHomeDir()
@@ -91,7 +90,10 @@ func ResolveAuthDir(authDir string) (string, error) {
 		normalized := strings.ReplaceAll(remainder, "\\", "/")
 		return filepath.Clean(filepath.Join(home, filepath.FromSlash(normalized))), nil
 	}
-	return filepath.Clean(authDir), nil
+	if filepath.IsAbs(authDir) {
+		return filepath.Clean(authDir), nil
+	}
+	return filepath.Clean(filepath.Join(DataDir(), authDir)), nil
 }
 
 // CountAuthFiles returns the number of auth records available through the provided Store.

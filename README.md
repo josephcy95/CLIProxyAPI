@@ -34,9 +34,19 @@
 docker pull ghcr.io/josephcy95/cli-proxy-api:latest
 ```
 
-### Docker Compose 部署（推荐）
+### Docker 部署（推荐：单卷 `/data`）
 
-持久化目录建议分开挂载：`config.yaml`、认证文件、日志，以及 **请求监控数据**（`usage.db`、模型价格/别名）。
+只需挂一个持久化目录到容器 `/data`。应用会自动使用：
+
+```
+/data/config.yaml
+/data/auths/
+/data/logs/
+/data/plugins/
+/data/usage.db
+```
+
+可选环境变量 `CLIPROXY_DATA_DIR`（默认 `/data`）。首次启动若无 `config.yaml`，entrypoint 会从镜像内 `config.example.yaml` 复制一份。
 
 ```yaml
 services:
@@ -47,45 +57,39 @@ services:
     ports:
       - "8317:8317"
     volumes:
-      # 配置
-      - ./config.yaml:/CLIProxyAPI/config.yaml
-      # OAuth / API 凭证（auth JSON）
-      - ./auths:/root/.cli-proxy-api
-      # 日志
-      - ./logs:/CLIProxyAPI/logs
-      # 请求监控持久化数据（usage.db、model prices/aliases）
-      # 宿主机路径请按环境修改，例如 Unraid:
-      #   /mnt/user/appdata/cliproxyapi/data:/CLIProxyAPI/data
-      - ./data:/CLIProxyAPI/data
+      # Unraid 示例: /mnt/user/appdata/cliproxyapi-patched:/data
+      - ./data:/data
     restart: unless-stopped
 ```
 
-也可用环境变量覆盖挂载路径（见仓库内 `docker-compose.yml`）：
+Unraid `docker run` 精简示例：
 
-| 变量 | 默认 | 容器内路径 |
-|------|------|------------|
-| `CLI_PROXY_CONFIG_PATH` | `./config.yaml` | `/CLIProxyAPI/config.yaml` |
-| `CLI_PROXY_AUTH_PATH` | `./auths` | `/root/.cli-proxy-api` |
-| `CLI_PROXY_LOG_PATH` | `./logs` | `/CLIProxyAPI/logs` |
-| `CLI_PROXY_DATA_PATH` | `./data` | `/CLIProxyAPI/data` |
+```bash
+docker run -d --name cli-proxy-api-patched --net cpa \
+  -e TZ=Asia/Singapore \
+  -p 58317:8317 \
+  -v /mnt/user/appdata/cliproxyapi-patched:/data \
+  --restart unless-stopped \
+  ghcr.io/josephcy95/cli-proxy-api:latest
+```
 
-`CLI_PROXY_DATA_PATH` 对应监控库默认路径 `usage-store-path: "data/usage.db"`（容器内即 `/CLIProxyAPI/data/usage.db`）。**不要**把该目录挂到 `auths` 或 `logs` 下，以免重建容器或清理日志时丢掉历史请求。
-
-在 `config.yaml` 中开启统计并确认路径（可选）：
+在 `config.yaml` 中开启统计（路径默认可省略）：
 
 ```yaml
 usage-statistics-enabled: true
-usage-store-path: "data/usage.db"
+# usage-store-path: "usage.db"
 # usage-retention-days: 30
 ```
 
 启动：
 
 ```bash
-mkdir -p auths logs data
+mkdir -p data
 docker compose up -d
 ```
 
 服务启动后访问 `/management.html`，管理界面中打开 **Monitoring**（`/monitoring`）即可查看实时请求、账号用量与定价。也可在 Monitoring 页一键开启 usage statistics。
+
+**迁移旧多挂载部署：** 把原来的 `config.yaml`、`auths/`、`logs/`、`plugins/`、`usage.db`（或 `data/usage.db`）都放到同一 host 目录下再挂到 `/data`。`auth-dir` 改为 `auths`（或绝对路径）。
 
 感谢 [LINUX DO](https://linux.do/) 社区的交流。MIT，上游协议和署名照旧保留。

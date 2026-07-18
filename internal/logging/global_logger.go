@@ -136,24 +136,12 @@ func isDirWritable(dir string) bool {
 }
 
 // ResolveLogDirectory determines the directory used for application logs.
+// Prefer CLIPROXY_DATA_DIR/logs (default /data/logs), then WRITABLE_PATH/logs.
 func ResolveLogDirectory(cfg *config.Config) string {
-	logDir := "logs"
 	if base := util.WritablePath(); base != "" {
 		return filepath.Join(base, "logs")
 	}
-	if cfg == nil {
-		return logDir
-	}
-	if !isDirWritable(logDir) {
-		authDir, err := util.ResolveAuthDir(cfg.AuthDir)
-		if err != nil {
-			log.Warnf("Failed to resolve auth-dir %q for log directory: %v", cfg.AuthDir, err)
-		}
-		if authDir != "" {
-			logDir = filepath.Join(authDir, "logs")
-		}
-	}
-	return logDir
+	return util.LogsDirPath()
 }
 
 // ConfigureLogOutput switches the global log destination between rotating files and stdout.

@@ -10,6 +10,10 @@ import (
 )
 
 func TestParseConfigBytes_PluginsDefaults(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLIPROXY_DATA_DIR", root)
+	t.Setenv("CLI_PROXY_DATA_DIR", "")
+
 	cfg, errParse := ParseConfigBytes([]byte(`
 plugins: {}
 `))
@@ -20,8 +24,9 @@ plugins: {}
 	if cfg.Plugins.Enabled {
 		t.Fatal("Plugins.Enabled = true, want false")
 	}
-	if cfg.Plugins.Dir != "plugins" {
-		t.Fatalf("Plugins.Dir = %q, want plugins", cfg.Plugins.Dir)
+	wantDir := filepath.Join(root, "plugins")
+	if cfg.Plugins.Dir != wantDir {
+		t.Fatalf("Plugins.Dir = %q, want %q", cfg.Plugins.Dir, wantDir)
 	}
 	if cfg.Plugins.Configs == nil {
 		t.Fatal("Plugins.Configs = nil, want empty map")

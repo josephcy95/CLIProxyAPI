@@ -17,7 +17,7 @@ remote-management:
   disable-auto-update-panel: false
   panel-github-repository: "https://github.com/josephcy95/Cli-Proxy-API-Management-Center"
 
-auth-dir: "~/.cli-proxy-api"
+auth-dir: "auths"
 api-keys: []
 
 debug: false
@@ -38,7 +38,7 @@ logging-to-file: false
 logs-max-total-size-mb: 0
 error-logs-max-files: 10
 usage-statistics-enabled: false
-usage-store-path: "data/usage.db"
+usage-store-path: "usage.db"
 usage-retention-days: 30
 redis-usage-queue-retention-seconds: 60
 proxy-url: ""

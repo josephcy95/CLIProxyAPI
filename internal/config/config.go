@@ -23,7 +23,8 @@ import (
 const (
 	DefaultPanelGitHubRepository = "https://github.com/josephcy95/Cli-Proxy-API-Management-Center"
 	DefaultPprofAddr             = "127.0.0.1:8316"
-	DefaultAuthDir               = "~/.cli-proxy-api"
+	// DefaultAuthDir is relative to the data root; resolved to DataDir/auths at runtime.
+	DefaultAuthDir = "auths"
 )
 
 // Config represents the application's configuration, loaded from a YAML file.
@@ -74,8 +75,8 @@ type Config struct {
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
 	// UsageStorePath is the SQLite path for durable request monitoring events and prices.
-	// Relative paths resolve against the process working directory (Docker: /CLIProxyAPI).
-	// Default: data/usage.db
+	// Relative paths resolve under CLIPROXY_DATA_DIR (default /data). Absolute paths are kept.
+	// Default: usage.db → /data/usage.db
 	UsageStorePath string `yaml:"usage-store-path" json:"usage-store-path"`
 
 	// UsageRetentionDays controls how long durable usage events are kept.
@@ -89,7 +90,6 @@ type Config struct {
 
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
-
 
 	// TransientErrorCooldownSeconds controls cooldowns for transient upstream errors.
 	// 0 keeps the legacy default cooldown. Negative values disable these cooldowns.
@@ -306,7 +306,7 @@ type CodexConfig struct {
 	UsageLimitDisableAfter *int `yaml:"usage-limit-disable-after,omitempty" json:"usage-limit-disable-after,omitempty"`
 	// UsageLimitCooldownFallbackHours is used when usage_limit_reached has no resets_at /
 	// resets_in_seconds. Set 0 to keep the short progressive quota backoff only.
-	UsageLimitCooldownFallbackHours *int `yaml:"usage-limit-cooldown-fallback-hours,omitempty" json:"usage-limit-cooldown-fallback-hours,omitempty"`
+	UsageLimitCooldownFallbackHours *int                    `yaml:"usage-limit-cooldown-fallback-hours,omitempty" json:"usage-limit-cooldown-fallback-hours,omitempty"`
 	Instructions                    CodexInstructionsConfig `yaml:"instructions" json:"instructions"`
 }
 

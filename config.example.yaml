@@ -32,8 +32,9 @@ remote-management:
   # GitHub repository for the management control panel. Accepts a repository URL or releases API URL.
   panel-github-repository: "https://github.com/josephcy95/Cli-Proxy-API-Management-Center"
 
-# Authentication directory (supports ~ for home directory)
-auth-dir: "~/.cli-proxy-api"
+# Authentication directory (relative paths are under CLIPROXY_DATA_DIR, default /data).
+# Docker one-volume: mount host appdata -> /data (config.yaml, auths/, logs/, plugins/, usage.db).
+auth-dir: "auths"
 
 # API keys for authentication
 api-keys:
@@ -42,9 +43,9 @@ api-keys:
   - "your-api-key-3"
 
 # Durable request monitoring (SQLite). Requires usage-statistics-enabled.
-# Docker: mount host .../cliproxyapi/data -> /CLIProxyAPI/data
+# Default: /data/usage.db when using the single data root.
 # usage-statistics-enabled: false
-# usage-store-path: "data/usage.db"
+# usage-store-path: "usage.db"
 # usage-retention-days: 30
 
 # Enable debug logging
@@ -66,6 +67,7 @@ pprof:
 # Per-plugin enabled only controls plugins.configs.<pluginID>.enabled and does not implicitly change global plugins.enabled.
 plugins:
   enabled: false
+  # Relative to CLIPROXY_DATA_DIR (default /data/plugins).
   dir: "plugins"
   # Additional plugin store registries. The built-in official registry is always included.
   # store-sources:

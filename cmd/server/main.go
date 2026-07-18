@@ -183,11 +183,19 @@ func main() {
 		return
 	}
 
-	// Load environment variables from .env if present.
-	if errLoad := godotenv.Load(filepath.Join(wd, ".env")); errLoad != nil {
-		if !errors.Is(errLoad, os.ErrNotExist) {
-			log.WithError(errLoad).Warn("failed to load .env file")
+	if errData := util.EnsureDataDirLayout(); errData != nil {
+		log.WithError(errData).Warn("failed to ensure data directory layout")
+	}
+
+	// Load environment variables from .env if present (data root first, then workdir).
+	for _, envPath := range []string{filepath.Join(util.DataDir(), ".env"), filepath.Join(wd, ".env")} {
+		if errLoad := godotenv.Load(envPath); errLoad != nil {
+			if !errors.Is(errLoad, os.ErrNotExist) {
+				log.WithError(errLoad).Warn("failed to load .env file")
+			}
+			continue
 		}
+		break
 	}
 
 	lookupEnv := func(keys ...string) (string, bool) {
@@ -363,7 +371,7 @@ func main() {
 		if strings.TrimSpace(configPath) != "" {
 			configFilePath = configPath
 		} else {
-			configFilePath = filepath.Join(wd, "config.yaml")
+			configFilePath = util.ConfigFilePath()
 		}
 
 		// Local stores are intentionally disabled when config is loaded from home.
@@ -515,12 +523,7 @@ func main() {
 		configFilePath = configPath
 		cfg, err = config.LoadConfigOptional(configPath, isCloudDeploy)
 	} else {
-		wd, err = os.Getwd()
-		if err != nil {
-			log.Errorf("failed to get working directory: %v", err)
-			return
-		}
-		configFilePath = filepath.Join(wd, "config.yaml")
+		configFilePath = util.ConfigFilePath()
 		cfg, err = config.LoadConfigOptional(configFilePath, isCloudDeploy)
 	}
 	if err != nil {
@@ -793,11 +796,7 @@ func defaultPluginBootstrapConfigPath(defaultPath string) string {
 	if strings.TrimSpace(defaultPath) != "" {
 		return defaultPath
 	}
-	wd, errGetwd := os.Getwd()
-	if errGetwd != nil {
-		return "config.yaml"
-	}
-	return filepath.Join(wd, "config.yaml")
+	return util.ConfigFilePath()
 }
 
 func loadPluginBootstrapConfig(path string) *config.Config {

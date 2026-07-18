@@ -1184,33 +1184,12 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 	t.Setenv("WRITABLE_PATH", "")
 	t.Setenv("writable_path", "")
 
-	originalWD, errGetwd := os.Getwd()
-	if errGetwd != nil {
-		t.Fatalf("failed to get current working directory: %v", errGetwd)
-	}
-
 	tmpDir := t.TempDir()
-	if errChdir := os.Chdir(tmpDir); errChdir != nil {
-		t.Fatalf("failed to switch working directory: %v", errChdir)
-	}
-	defer func() {
-		if errChdirBack := os.Chdir(originalWD); errChdirBack != nil {
-			t.Fatalf("failed to restore working directory: %v", errChdirBack)
-		}
-	}()
+	t.Setenv("CLIPROXY_DATA_DIR", tmpDir)
+	t.Setenv("CLI_PROXY_DATA_DIR", "")
 
-	// Force ResolveLogDirectory to fallback to auth-dir/logs by making ./logs not a writable directory.
-	if errWriteFile := os.WriteFile(filepath.Join(tmpDir, "logs"), []byte("not-a-directory"), 0o644); errWriteFile != nil {
-		t.Fatalf("failed to create blocking logs file: %v", errWriteFile)
-	}
-
-	configDir := filepath.Join(tmpDir, "config")
-	if errMkdirConfig := os.MkdirAll(configDir, 0o755); errMkdirConfig != nil {
-		t.Fatalf("failed to create config dir: %v", errMkdirConfig)
-	}
-	configPath := filepath.Join(configDir, "config.yaml")
-
-	authDir := filepath.Join(tmpDir, "auth")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	authDir := filepath.Join(tmpDir, "auths")
 	if errMkdirAuth := os.MkdirAll(authDir, 0o700); errMkdirAuth != nil {
 		t.Fatalf("failed to create auth dir: %v", errMkdirAuth)
 	}
@@ -1251,30 +1230,30 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 		t.Fatalf("failed to write forced error request log: %v", errLog)
 	}
 
-	authLogsDir := filepath.Join(authDir, "logs")
-	authEntries, errReadAuthDir := os.ReadDir(authLogsDir)
-	if errReadAuthDir != nil {
-		t.Fatalf("failed to read auth logs dir %s: %v", authLogsDir, errReadAuthDir)
+	dataLogsDir := filepath.Join(tmpDir, "logs")
+	dataEntries, errReadDataDir := os.ReadDir(dataLogsDir)
+	if errReadDataDir != nil {
+		t.Fatalf("failed to read data logs dir %s: %v", dataLogsDir, errReadDataDir)
 	}
-	foundErrorLogInAuthDir := false
-	for _, entry := range authEntries {
+	foundErrorLogInDataDir := false
+	for _, entry := range dataEntries {
 		if strings.HasPrefix(entry.Name(), "error-") && strings.HasSuffix(entry.Name(), ".log") {
-			foundErrorLogInAuthDir = true
+			foundErrorLogInDataDir = true
 			break
 		}
 	}
-	if !foundErrorLogInAuthDir {
-		t.Fatalf("expected forced error log in auth fallback dir %s, got entries: %+v", authLogsDir, authEntries)
+	if !foundErrorLogInDataDir {
+		t.Fatalf("expected forced error log in data logs dir %s, got entries: %+v", dataLogsDir, dataEntries)
 	}
 
-	configLogsDir := filepath.Join(configDir, "logs")
-	configEntries, errReadConfigDir := os.ReadDir(configLogsDir)
-	if errReadConfigDir != nil && !os.IsNotExist(errReadConfigDir) {
-		t.Fatalf("failed to inspect config logs dir %s: %v", configLogsDir, errReadConfigDir)
+	authLogsDir := filepath.Join(authDir, "logs")
+	authEntries, errReadAuthDir := os.ReadDir(authLogsDir)
+	if errReadAuthDir != nil && !os.IsNotExist(errReadAuthDir) {
+		t.Fatalf("failed to inspect auth logs dir %s: %v", authLogsDir, errReadAuthDir)
 	}
-	for _, entry := range configEntries {
+	for _, entry := range authEntries {
 		if strings.HasPrefix(entry.Name(), "error-") && strings.HasSuffix(entry.Name(), ".log") {
-			t.Fatalf("unexpected forced error log in config dir %s", configLogsDir)
+			t.Fatalf("unexpected forced error log in auth dir %s", authLogsDir)
 		}
 	}
 }

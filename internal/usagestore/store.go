@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	DefaultStoreRelativePath = "data/usage.db"
+	// DefaultStoreRelativePath is relative to CLIPROXY_DATA_DIR (default /data/usage.db).
+	DefaultStoreRelativePath = "usage.db"
 	DefaultRetentionDays     = 30
 	maxInsertBatch           = 64
 )
@@ -41,17 +42,7 @@ type Options struct {
 
 // Open creates or opens the usage database at path and starts background writers.
 func Open(opts Options) (*Store, error) {
-	path := strings.TrimSpace(opts.Path)
-	if path == "" {
-		path = DefaultStoreRelativePath
-	}
-	if !filepath.IsAbs(path) {
-		wd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("usagestore: resolve workdir: %w", err)
-		}
-		path = filepath.Join(wd, path)
-	}
+	path := ResolveStorePath(opts.Path, "")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("usagestore: create dir: %w", err)
 	}
@@ -354,21 +345,32 @@ func nullInt(v int) any {
 	return v
 }
 
-// ResolveStorePath resolves a configured store path relative to config dir when needed.
+// ResolveStorePath resolves a configured store path under the data root when relative.
+// Absolute paths are kept. Empty defaults to DataDir/usage.db.
+// configFilePath is unused (kept for call-site compatibility).
 func ResolveStorePath(storePath, configFilePath string) string {
+	_ = configFilePath
 	path := strings.TrimSpace(storePath)
 	if path == "" {
-		path = DefaultStoreRelativePath
+		return filepath.Join(dataDir(), DefaultStoreRelativePath)
 	}
 	if filepath.IsAbs(path) {
 		return path
 	}
-	// Prefer process workdir for Docker WORKDIR=/CLIProxyAPI defaults.
-	if wd, err := os.Getwd(); err == nil && wd != "" {
-		return filepath.Join(wd, path)
+	// Legacy "data/usage.db" → treat as usage.db under data root.
+	if path == "data/usage.db" || path == filepath.FromSlash("data/usage.db") {
+		return filepath.Join(dataDir(), DefaultStoreRelativePath)
 	}
-	if configFilePath != "" {
-		return filepath.Join(filepath.Dir(configFilePath), path)
+	return filepath.Join(dataDir(), path)
+}
+
+func dataDir() string {
+	for _, key := range []string{"CLIPROXY_DATA_DIR", "CLI_PROXY_DATA_DIR"} {
+		if value, ok := os.LookupEnv(key); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return filepath.Clean(trimmed)
+			}
+		}
 	}
-	return path
+	return "/data"
 }
