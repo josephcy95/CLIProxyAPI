@@ -613,11 +613,16 @@ func (e *QoderCNExecutor) Execute(ctx context.Context, authRecord *cliproxyauth.
 			return cliproxyexecutor.Response{}, chunk.Err
 		}
 
-		// ExecuteStream was called with SourceFormat=FormatOpenAI so
-		// TranslateStream strips the "data:" prefix and returns raw JSON.
-		// Skip empty or [DONE] payloads.
-		raw := chunk.Payload
-		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("[DONE]")) {
+		// ExecuteStream emits OpenAI-compatible SSE ("data: {...}") or raw JSON
+		// depending on the response translator. Accept both shapes.
+		raw := bytes.TrimSpace(chunk.Payload)
+		if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
+			continue
+		}
+		if bytes.HasPrefix(raw, []byte("data:")) {
+			raw = bytes.TrimSpace(raw[5:])
+		}
+		if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
 			continue
 		}
 

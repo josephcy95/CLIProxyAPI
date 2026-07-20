@@ -22,9 +22,10 @@ const (
 	// QoderChatURLEncoded is the chat URL with Encode=1, used when the request
 	// body is encoded with QoderCNEncodeBody to bypass WAF pattern matching.
 	QoderChatURLEncoded = QoderChatURL + "&Encode=1"
-	// QoderModelListURL is the model catalog endpoint. CN qoderclicn calls
-	// /api/v2/model/list on the gateway host (no /algo prefix), COSY-signed.
-	QoderModelListURL = QoderInferURL + "/api/v2/model/list"
+	// QoderModelListURL is the model catalog endpoint. COSY signing uses the
+	// path after stripping the leading "/algo" prefix (same as chat).
+	// Live probe: /algo/api/v2/model/list returns 200; the non-algo path 503s.
+	QoderModelListURL = QoderInferURL + "/algo/api/v2/model/list"
 )
 
 // ModelMap is the canonical set of model identifiers Qoder accepts. Based on

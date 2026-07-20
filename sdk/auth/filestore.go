@@ -346,6 +346,21 @@ func (s *FileTokenStore) readAuthFiles(path, baseDir string) ([]*cliproxyauth.Au
 				if strings.TrimSpace(storage.Type) == "" {
 					storage.Type = "qodercn"
 				}
+				if strings.TrimSpace(storage.Token) == "" {
+					if v, ok := metadata["access_token"].(string); ok {
+						storage.Token = strings.TrimSpace(v)
+					}
+				}
+				if strings.TrimSpace(storage.UserID) == "" {
+					if v, ok := metadata["user_id"].(string); ok {
+						storage.UserID = strings.TrimSpace(v)
+					}
+				}
+				if strings.TrimSpace(storage.MachineID) == "" {
+					if v, ok := metadata["machine_id"].(string); ok {
+						storage.MachineID = strings.TrimSpace(v)
+					}
+				}
 				auth.Storage = &storage
 			}
 		}
