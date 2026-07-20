@@ -28,6 +28,7 @@ type staticModelsJSON struct {
 	Kimi        []*ModelInfo `json:"kimi"`
 	Antigravity []*ModelInfo `json:"antigravity"`
 	XAI         []*ModelInfo `json:"xai"`
+	QoderCN     []*ModelInfo `json:"qodercn"`
 }
 
 // GetClaudeModels returns the standard Claude model definitions.
@@ -73,6 +74,11 @@ func GetCodexProModels() []*ModelInfo {
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
 func GetKimiModels() []*ModelInfo {
 	return cloneModelInfos(getModels().Kimi)
+}
+
+// GetQoderCNModels returns static Qoder CN model definitions (live list is preferred).
+func GetQoderCNModels() []*ModelInfo {
+	return cloneModelInfos(getModels().QoderCN)
 }
 
 // GetAntigravityModels returns the standard Antigravity model definitions.
@@ -296,6 +302,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetAntigravityModels()
 	case "xai", "x-ai", "grok":
 		return GetXAIModels()
+	case "qodercn", "qoder-cn", "qoder_cn":
+		return GetQoderCNModels()
 	default:
 		return nil
 	}
@@ -318,6 +326,7 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Kimi,
 		data.Antigravity,
 		data.XAI,
+		data.QoderCN,
 	}
 	for _, models := range allModels {
 		for _, m := range models {
