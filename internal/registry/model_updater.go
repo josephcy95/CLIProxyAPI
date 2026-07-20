@@ -121,6 +121,9 @@ func tryRefreshModels(ctx context.Context, label string) {
 		return
 	}
 
+	// Keep fork-only catalogs that remote models.json does not publish yet.
+	preserveLocalProviderCatalogs(oldData, parsed)
+
 	// Detect changes before updating store.
 	changed := detectChangedProviders(oldData, parsed)
 
@@ -314,6 +317,17 @@ func getModels() *staticModelsJSON {
 	modelsCatalogStore.mu.RLock()
 	defer modelsCatalogStore.mu.RUnlock()
 	return modelsCatalogStore.data
+}
+
+// preserveLocalProviderCatalogs keeps provider sections that exist only in the
+// local/embedded catalog when remote models.json does not include them.
+func preserveLocalProviderCatalogs(oldData, newData *staticModelsJSON) {
+	if oldData == nil || newData == nil {
+		return
+	}
+	if len(newData.QoderCN) == 0 && len(oldData.QoderCN) > 0 {
+		newData.QoderCN = oldData.QoderCN
+	}
 }
 
 func validateModelsCatalog(data *staticModelsJSON) error {

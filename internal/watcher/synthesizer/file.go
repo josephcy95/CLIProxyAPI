@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	qodercnauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/qodercn"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -228,6 +229,12 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	if provider == "codex" {
 		if pt := codexPlanTypeFromMetadata(metadata); pt != "" {
 			a.Attributes["plan_type"] = pt
+		}
+	}
+	// Qoder CN executor requires typed token storage (user id + device token + machine id).
+	if provider == "qodercn" {
+		if storage := qodercnauth.StorageFromMetadata(metadata); storage != nil {
+			a.Storage = storage
 		}
 	}
 	return []*coreauth.Auth{a}

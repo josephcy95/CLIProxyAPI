@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	qodercnauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/qodercn"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -765,5 +766,39 @@ func TestFileSynthesizer_Synthesize_NoteParsing(t *testing.T) {
 				t.Fatalf("expected note attribute to be absent, got %q", value)
 			}
 		})
+	}
+}
+
+func TestSynthesizeQoderCNAttachesTokenStorage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "qodercn-user.json")
+	raw := []byte(`{
+		"type":"qodercn",
+		"token":"dt-test-token",
+		"user_id":"uid-1",
+		"machine_id":"mid-1",
+		"email":"uid-1",
+		"name":"tester"
+	}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewFileSynthesizer()
+	auths, err := s.Synthesize(&SynthesisContext{AuthDir: dir, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("auths=%d", len(auths))
+	}
+	if auths[0].Provider != "qodercn" {
+		t.Fatalf("provider=%q", auths[0].Provider)
+	}
+	storage, ok := auths[0].Storage.(*qodercnauth.QoderTokenStorage)
+	if !ok || storage == nil {
+		t.Fatalf("storage type=%T", auths[0].Storage)
+	}
+	if storage.Token != "dt-test-token" || storage.UserID != "uid-1" || storage.MachineID != "mid-1" {
+		t.Fatalf("storage=%+v", storage)
 	}
 }

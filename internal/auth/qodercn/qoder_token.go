@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +100,49 @@ type QoderQuota struct {
 // SetMetadata allows external callers to inject metadata into the storage before saving.
 func (ts *QoderTokenStorage) SetMetadata(meta map[string]any) {
 	ts.Metadata = meta
+}
+
+// StorageFromMetadata rebuilds QoderTokenStorage from an auth JSON metadata map.
+// File-backed OAuth loads only put fields into Metadata; the executor needs Storage.
+func StorageFromMetadata(metadata map[string]any) *QoderTokenStorage {
+	if metadata == nil {
+		return nil
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	var storage QoderTokenStorage
+	if err = json.Unmarshal(raw, &storage); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(storage.Type) == "" {
+		storage.Type = "qodercn"
+	}
+	if strings.TrimSpace(storage.Token) == "" {
+		if v, ok := metadata["access_token"].(string); ok {
+			storage.Token = strings.TrimSpace(v)
+		}
+	}
+	if strings.TrimSpace(storage.Token) == "" {
+		if v, ok := metadata["token"].(string); ok {
+			storage.Token = strings.TrimSpace(v)
+		}
+	}
+	if strings.TrimSpace(storage.UserID) == "" {
+		if v, ok := metadata["user_id"].(string); ok {
+			storage.UserID = strings.TrimSpace(v)
+		}
+	}
+	if strings.TrimSpace(storage.MachineID) == "" {
+		if v, ok := metadata["machine_id"].(string); ok {
+			storage.MachineID = strings.TrimSpace(v)
+		}
+	}
+	if strings.TrimSpace(storage.Token) == "" || strings.TrimSpace(storage.UserID) == "" {
+		return nil
+	}
+	return &storage
 }
 
 // SetModelConfigs replaces the cached per-model configs atomically.
