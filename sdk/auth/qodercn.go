@@ -96,10 +96,19 @@ func (a *QoderCNAuthenticator) Login(ctx context.Context, cfg *config.Config, op
 
 	fileName := fmt.Sprintf("qodercn-%s.json", label)
 	metadata := map[string]any{
-		"type":    "qodercn",
-		"email":   label,
-		"name":    name,
-		"user_id": tokenData.UserID,
+		"type":         "qodercn",
+		"email":        label,
+		"name":         name,
+		"user_id":      tokenData.UserID,
+		"token":        tokenData.AccessToken,
+		"access_token": tokenData.AccessToken,
+		"machine_id":   deviceFlow.MachineID,
+	}
+	if tokenData.RefreshToken != "" {
+		metadata["refresh_token"] = tokenData.RefreshToken
+	}
+	if tokenData.ExpireTime > 0 {
+		metadata["expire_time"] = tokenData.ExpireTime
 	}
 
 	fmt.Println("Qoder CN authentication successful")

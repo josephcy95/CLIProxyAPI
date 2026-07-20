@@ -67,8 +67,16 @@ type QoderTokenStorage struct {
 
 // QoderUsageInfo holds the parsed /api/v2/quota/usage response.
 type QoderUsageInfo struct {
+	// UserID is the account id returned by quota/usage.
+	UserID string `json:"userId,omitempty"`
+	// UserType is the plan/user tier string (e.g. personal_professional_trial).
+	UserType string `json:"userType,omitempty"`
+	// UsageType is the unit kind reported by upstream (typically "credits").
+	UsageType string `json:"usageType,omitempty"`
 	// UserQuota is the personal credit quota.
 	UserQuota QoderQuota `json:"userQuota"`
+	// AddOnQuota is the promotional/addon credit package (CN accounts).
+	AddOnQuota QoderQuota `json:"addOnQuota"`
 	// OrgResourcePackage is the org-level resource package.
 	OrgResourcePackage QoderQuota `json:"orgResourcePackage"`
 	// TotalUsagePercentage is the combined usage percentage (0–1).

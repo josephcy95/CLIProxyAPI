@@ -369,8 +369,34 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	reg := registry.GetGlobalRegistry()
 	models := reg.GetModelsForClient(authID)
 
+	// Qoder CN models are fetched live into the registry; if empty, fall back to
+	// the static channel catalog so the management UI still has selectable IDs.
+	if len(models) == 0 && h.authManager != nil {
+		isQoderCN := false
+		if auth, ok := h.authManager.GetByID(authID); ok && auth != nil {
+			isQoderCN = strings.EqualFold(strings.TrimSpace(auth.Provider), "qodercn")
+		}
+		if !isQoderCN {
+			for _, auth := range h.authManager.List() {
+				if auth == nil {
+					continue
+				}
+				if auth.FileName == name || auth.ID == name {
+					isQoderCN = strings.EqualFold(strings.TrimSpace(auth.Provider), "qodercn")
+					break
+				}
+			}
+		}
+		if isQoderCN {
+			models = registry.GetQoderCNModels()
+		}
+	}
+
 	result := make([]gin.H, 0, len(models))
 	for _, m := range models {
+		if m == nil {
+			continue
+		}
 		entry := gin.H{
 			"id": m.ID,
 		}
@@ -549,6 +575,44 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 			}
 			if !cooldownUntil.IsZero() {
 				entry["xai_cooldown_until"] = cooldownUntil
+			}
+		}
+	}
+	// Expose Qoder CN credit usage when available (filled by model/usage refresh).
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "qodercn") {
+		if storage, ok := auth.Storage.(*qodercnauth.QoderTokenStorage); ok && storage != nil {
+			if u := storage.GetUsageInfo(); u != nil {
+				usage := gin.H{
+					"used":              u.UserQuota.Used,
+					"total":             u.UserQuota.Total,
+					"remaining":         u.UserQuota.Remaining,
+					"percentage":        u.UserQuota.Percentage,
+					"unit":              u.UserQuota.Unit,
+					"total_percentage":  u.TotalUsagePercentage,
+					"is_quota_exceeded": u.IsQuotaExceeded,
+					"expires_at":        u.ExpiresAt,
+					"user_type":         u.UserType,
+					"usage_type":        u.UsageType,
+				}
+				if u.AddOnQuota.Total > 0 || u.AddOnQuota.Remaining > 0 || u.AddOnQuota.Used > 0 {
+					usage["addon"] = gin.H{
+						"used":       u.AddOnQuota.Used,
+						"total":      u.AddOnQuota.Total,
+						"remaining":  u.AddOnQuota.Remaining,
+						"percentage": u.AddOnQuota.Percentage,
+						"unit":       u.AddOnQuota.Unit,
+					}
+				}
+				if u.OrgResourcePackage.Total > 0 || u.OrgResourcePackage.Remaining > 0 || u.OrgResourcePackage.Used > 0 {
+					usage["org"] = gin.H{
+						"used":       u.OrgResourcePackage.Used,
+						"total":      u.OrgResourcePackage.Total,
+						"remaining":  u.OrgResourcePackage.Remaining,
+						"percentage": u.OrgResourcePackage.Percentage,
+						"unit":       u.OrgResourcePackage.Unit,
+					}
+				}
+				entry["usage"] = usage
 			}
 		}
 	}
@@ -2816,10 +2880,19 @@ func (h *Handler) RequestQoderCNToken(c *gin.Context) {
 
 		fileName := fmt.Sprintf("qodercn-%s.json", label)
 		metadata := map[string]any{
-			"type":    "qodercn",
-			"email":   label,
-			"name":    name,
-			"user_id": tokenData.UserID,
+			"type":         "qodercn",
+			"email":        label,
+			"name":         name,
+			"user_id":      tokenData.UserID,
+			"token":        tokenData.AccessToken,
+			"access_token": tokenData.AccessToken,
+			"machine_id":   deviceFlow.MachineID,
+		}
+		if tokenData.RefreshToken != "" {
+			metadata["refresh_token"] = tokenData.RefreshToken
+		}
+		if tokenData.ExpireTime > 0 {
+			metadata["expire_time"] = tokenData.ExpireTime
 		}
 		record := &coreauth.Auth{
 			ID:       fileName,
