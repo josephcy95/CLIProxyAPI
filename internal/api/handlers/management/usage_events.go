@@ -201,18 +201,16 @@ func (h *Handler) GetUsageSummary(c *gin.Context) {
 		return
 	}
 
-	// Cost estimate: scan events with a soft cap for large ranges.
-	costFilter := filter
-	costFilter.BeforeID = 0
-	costFilter.Limit = 5000
-	events, err := store.ListEvents(c.Request.Context(), costFilter)
-	if err == nil {
-		prices, aliases, ok := h.pricingMaps(c, store)
-		if ok {
-			total, priced := usagestore.AttachEventCosts(events, prices, aliases)
-			summary.EstimatedCost = total
-			summary.PricedCalls = priced
-		}
+	// Cost estimate across ALL matching events, aggregated per model in SQL so
+	// the total covers every row (not just a capped page) and stays consistent
+	// with per-model filtered totals.
+	prices, aliases, ok := h.pricingMaps(c, store)
+	if !ok {
+		return
+	}
+	if total, priced, err := store.SumCost(c.Request.Context(), filter, prices, aliases); err == nil {
+		summary.EstimatedCost = total
+		summary.PricedCalls = priced
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -267,22 +265,11 @@ func (h *Handler) GetUsageAccountStats(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// Approximate account cost from recent events per group is expensive; compute from listed events.
-	costFilter := filter
-	costFilter.Limit = 5000
-	events, err := store.ListEvents(c.Request.Context(), costFilter)
-	if err == nil {
-		usagestore.AttachEventCosts(events, prices, aliases)
-		costByKey := map[string]float64{}
-		for _, e := range events {
-			if e.EstimatedCost == nil {
-				continue
-			}
-			key := e.AuthIndex + "\x00" + e.Source + "\x00" + e.SourceHash + "\x00" + e.Provider
-			costByKey[key] += *e.EstimatedCost
-		}
+	// Aggregate cost per account across ALL matching events (per-model pricing),
+	// instead of bucketing a capped page of recent events.
+	if costByKey, err := store.CostByAccount(c.Request.Context(), filter, prices, aliases); err == nil {
 		for i := range stats {
-			key := stats[i].AuthIndex + "\x00" + stats[i].Source + "\x00" + stats[i].SourceHash + "\x00" + stats[i].Provider
+			key := usagestore.AccountKey(stats[i].AuthIndex, stats[i].Source, stats[i].SourceHash, stats[i].Provider)
 			stats[i].EstimatedCost = costByKey[key]
 		}
 	}

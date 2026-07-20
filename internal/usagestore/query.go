@@ -279,6 +279,93 @@ func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit i
 	return out, rows.Err()
 }
 
+// SumCost computes the total estimated cost and priced-call count across ALL
+// events matching the filter. It aggregates token counts per (model, alias) in
+// SQL and applies the price book once per group, so the result covers every
+// matching row. This replaces materializing a capped page of events (which
+// silently undercounts cost once the match count exceeds the page limit and
+// breaks the "per-model costs sum to the total" invariant).
+func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (float64, int64, error) {
+	if s == nil {
+		return 0, 0, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(model,''), IFNULL(alias,''),
+		IFNULL(SUM(input_tokens),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(cached_tokens),0),
+		COUNT(*)
+		FROM usage_events ` + where + `
+		GROUP BY model, alias`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	var total float64
+	var priced int64
+	for rows.Next() {
+		var model, alias string
+		var input, output, reasoning, cacheRead, cacheCreation, cached, count int64
+		if err := rows.Scan(&model, &alias, &input, &output, &reasoning,
+			&cacheRead, &cacheCreation, &cached, &count); err != nil {
+			return 0, 0, err
+		}
+		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
+		if !ok {
+			continue
+		}
+		total += EstimateCost(p, input, output, reasoning, cacheRead, cacheCreation, cached)
+		priced += count
+	}
+	return total, priced, rows.Err()
+}
+
+// CostByAccount computes estimated cost per account group (auth_index, source,
+// source_hash, provider) across ALL matching events, applying per-model pricing.
+// The returned map is keyed the same way GetAccountStats groups accounts.
+func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (map[string]float64, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
+		IFNULL(model,''), IFNULL(alias,''),
+		IFNULL(SUM(input_tokens),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(cached_tokens),0)
+		FROM usage_events ` + where + `
+		GROUP BY auth_index, source, source_hash, provider, model, alias`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]float64)
+	for rows.Next() {
+		var authIndex, source, sourceHash, provider, model, alias string
+		var input, output, reasoning, cacheRead, cacheCreation, cached int64
+		if err := rows.Scan(&authIndex, &source, &sourceHash, &provider, &model, &alias,
+			&input, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
+			return nil, err
+		}
+		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
+		if !ok {
+			continue
+		}
+		key := AccountKey(authIndex, source, sourceHash, provider)
+		out[key] += EstimateCost(p, input, output, reasoning, cacheRead, cacheCreation, cached)
+	}
+	return out, rows.Err()
+}
+
+// AccountKey builds the grouping key shared by GetAccountStats and CostByAccount.
+func AccountKey(authIndex, source, sourceHash, provider string) string {
+	return authIndex + "\x00" + source + "\x00" + sourceHash + "\x00" + provider
+}
+
 // GetFilterOptions returns distinct filter values for dropdowns.
 func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (FilterOptions, error) {
 	var out FilterOptions
