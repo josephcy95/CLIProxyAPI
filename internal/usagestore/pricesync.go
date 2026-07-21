@@ -89,8 +89,8 @@ func (s *Store) SyncModelPrices(ctx context.Context, req PriceSyncRequest) (Pric
 
 	models := normalizeModelList(req.Models)
 	if len(models) == 0 {
-		fromMS := time.Now().AddDate(0, 0, -30).UnixMilli()
-		seen, err := s.ListDistinctModels(ctx, fromMS, 500)
+		// All models with usage records, not only the last 30 days.
+		seen, err := s.ListDistinctModels(ctx, 0, 2000)
 		if err != nil {
 			return PriceSyncResult{}, err
 		}
@@ -107,6 +107,11 @@ func (s *Store) SyncModelPrices(ctx context.Context, req PriceSyncRequest) (Pric
 	if err != nil {
 		return PriceSyncResult{}, err
 	}
+	aliases, err := s.LoadModelPriceAliases(ctx)
+	if err != nil {
+		return PriceSyncResult{}, err
+	}
+	aliasMap := AliasMap(aliases)
 
 	result := PriceSyncResult{
 		Sources:       sources,
@@ -118,9 +123,26 @@ func (s *Store) SyncModelPrices(ctx context.Context, req PriceSyncRequest) (Pric
 	matched := make([]ModelPrice, 0)
 
 	for _, modelID := range models {
+		// Already priced (direct entry, alias mapping, or override) → do not re-suggest
+		// catalog mappings unless the caller explicitly overrides.
+		if resolved, _, ok := ResolvePrice([]string{modelID}, existing, aliasMap); ok {
+			src := strings.ToLower(strings.TrimSpace(resolved.Source))
+			if !req.OverrideManual {
+				if src == "" || src == "manual" || src == "override" {
+					result.SkippedManual++
+				} else {
+					result.Skipped++
+				}
+				continue
+			}
+			// Override only rewrites non-manual / manual when OverrideManual is set;
+			// still skip pure fuzzy candidates for already-priced models and only
+			// re-apply automatic exact/unique matches below.
+		}
+
 		if price, reason, ok := findAutomaticCatalogPrice(catalog, modelID); ok {
 			existingPrice, hasExisting := existing[modelID]
-			if hasExisting && strings.EqualFold(strings.TrimSpace(existingPrice.Source), "manual") && !req.OverrideManual {
+			if hasExisting && isProtectedPriceSource(existingPrice.Source) && !req.OverrideManual {
 				result.SkippedManual++
 				continue
 			}
@@ -132,6 +154,12 @@ func (s *Store) SyncModelPrices(ctx context.Context, req PriceSyncRequest) (Pric
 			_ = reason
 			matched = append(matched, price)
 			toImport = append(toImport, price)
+			continue
+		}
+
+		// Fuzzy candidates only for models that still have no pricing.
+		if _, _, ok := ResolvePrice([]string{modelID}, existing, aliasMap); ok {
+			result.Skipped++
 			continue
 		}
 		cands := findCatalogCandidates(catalog, modelID)
@@ -158,7 +186,7 @@ func (s *Store) SyncModelPrices(ctx context.Context, req PriceSyncRequest) (Pric
 	if err != nil {
 		return PriceSyncResult{}, err
 	}
-	aliases, err := s.LoadModelPriceAliases(ctx)
+	aliasesOut, err := s.LoadModelPriceAliases(ctx)
 	if err != nil {
 		return PriceSyncResult{}, err
 	}
@@ -168,19 +196,23 @@ func (s *Store) SyncModelPrices(ctx context.Context, req PriceSyncRequest) (Pric
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Model < list[j].Model })
 	result.Prices = list
-	result.Aliases = aliases
+	result.Aliases = aliasesOut
 
-	aliasMap := AliasMap(aliases)
-	fromMS := time.Now().AddDate(0, 0, -30).UnixMilli()
-	recent, _ := s.ListDistinctModels(ctx, fromMS, 200)
+	aliasMapOut := AliasMap(aliasesOut)
+	seenModels, _ := s.ListDistinctModels(ctx, 0, 2000)
 	unpriced := make([]string, 0)
-	for _, m := range recent {
-		if _, _, ok := ResolvePrice([]string{m}, pricesMap, aliasMap); !ok {
+	for _, m := range seenModels {
+		if _, _, ok := ResolvePrice([]string{m}, pricesMap, aliasMapOut); !ok {
 			unpriced = append(unpriced, m)
 		}
 	}
 	result.Unpriced = unpriced
 	return result, nil
+}
+
+func isProtectedPriceSource(source string) bool {
+	s := strings.ToLower(strings.TrimSpace(source))
+	return s == "" || s == "manual" || s == "override"
 }
 
 func normalizeModelList(models []string) []string {

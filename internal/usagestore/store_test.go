@@ -115,6 +115,29 @@ func TestStoreInsertListSummaryAndPricing(t *testing.T) {
 	if len(accounts) == 0 || accounts[0].TotalCalls != 2 {
 		t.Fatalf("accounts = %#v", accounts)
 	}
+
+	apiKeys, err := store.GetAPIKeyStats(context.Background(), QueryFilter{}, 10)
+	if err != nil {
+		t.Fatalf("GetAPIKeyStats: %v", err)
+	}
+	if len(apiKeys) != 2 {
+		t.Fatalf("api key stats = %#v, want 2", apiKeys)
+	}
+	costByKey, err := store.CostByAPIKey(context.Background(), QueryFilter{}, prices, amap)
+	if err != nil {
+		t.Fatalf("CostByAPIKey: %v", err)
+	}
+	for i := range apiKeys {
+		key := APIKeyGroupKey(apiKeys[i].APIKey, apiKeys[i].APIKeyHash)
+		apiKeys[i].EstimatedCost = costByKey[key]
+	}
+	var sumCost float64
+	for _, st := range apiKeys {
+		sumCost += st.EstimatedCost
+	}
+	if sumCost <= 0 {
+		t.Fatalf("api key cost sum = %v, want > 0", sumCost)
+	}
 }
 
 func TestMaskAndHash(t *testing.T) {

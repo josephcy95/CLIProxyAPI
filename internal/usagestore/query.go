@@ -58,6 +58,19 @@ type AccountStat struct {
 	EstimatedCost float64 `json:"estimated_cost"`
 }
 
+// APIKeyStat aggregates usage by client API key.
+type APIKeyStat struct {
+	APIKey        string  `json:"api_key,omitempty"`
+	APIKeyHash    string  `json:"api_key_hash,omitempty"`
+	TotalCalls    int64   `json:"total_calls"`
+	SuccessCalls  int64   `json:"success_calls"`
+	FailureCalls  int64   `json:"failure_calls"`
+	TotalTokens   int64   `json:"total_tokens"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	EstimatedCost float64 `json:"estimated_cost"`
+}
+
 // FilterOptions lists distinct filter values in range.
 type FilterOptions struct {
 	Models       []string `json:"models"`
@@ -364,6 +377,95 @@ func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices ma
 // AccountKey builds the grouping key shared by GetAccountStats and CostByAccount.
 func AccountKey(authIndex, source, sourceHash, provider string) string {
 	return authIndex + "\x00" + source + "\x00" + sourceHash + "\x00" + provider
+}
+
+// GetAPIKeyStats groups usage by client api_key (falls back to api_key_hash when blank).
+func (s *Store) GetAPIKeyStats(ctx context.Context, filter QueryFilter, limit int) ([]APIKeyStat, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT
+		IFNULL(api_key,''), IFNULL(api_key_hash,''),
+		COUNT(*),
+		SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),
+		SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),
+		IFNULL(SUM(total_tokens),0),
+		IFNULL(SUM(input_tokens),0),
+		IFNULL(SUM(output_tokens),0)
+		FROM usage_events ` + where + `
+		GROUP BY api_key, api_key_hash
+		ORDER BY COUNT(*) DESC
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]APIKeyStat, 0, limit)
+	for rows.Next() {
+		var st APIKeyStat
+		if err := rows.Scan(
+			&st.APIKey, &st.APIKeyHash,
+			&st.TotalCalls, &st.SuccessCalls, &st.FailureCalls,
+			&st.TotalTokens, &st.InputTokens, &st.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// CostByAPIKey computes estimated cost per api_key / api_key_hash group across ALL matching events.
+func (s *Store) CostByAPIKey(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (map[string]float64, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(api_key,''), IFNULL(api_key_hash,''),
+		IFNULL(model,''), IFNULL(alias,''),
+		IFNULL(SUM(input_tokens),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(cached_tokens),0)
+		FROM usage_events ` + where + `
+		GROUP BY api_key, api_key_hash, model, alias`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]float64)
+	for rows.Next() {
+		var apiKey, apiKeyHash, model, alias string
+		var input, output, reasoning, cacheRead, cacheCreation, cached int64
+		if err := rows.Scan(&apiKey, &apiKeyHash, &model, &alias,
+			&input, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
+			return nil, err
+		}
+		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
+		if !ok {
+			continue
+		}
+		key := APIKeyGroupKey(apiKey, apiKeyHash)
+		out[key] += EstimateCost(p, input, output, reasoning, cacheRead, cacheCreation, cached)
+	}
+	return out, rows.Err()
+}
+
+// APIKeyGroupKey builds the grouping key shared by GetAPIKeyStats and CostByAPIKey.
+func APIKeyGroupKey(apiKey, apiKeyHash string) string {
+	return apiKey + "\x00" + apiKeyHash
 }
 
 // GetFilterOptions returns distinct filter values for dropdowns.

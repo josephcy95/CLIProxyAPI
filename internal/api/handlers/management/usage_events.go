@@ -276,6 +276,41 @@ func (h *Handler) GetUsageAccountStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"accounts": stats, "generated_at_ms": time.Now().UnixMilli()})
 }
 
+// GetUsageAPIKeyStats returns per-client-API-key aggregates (spending by key).
+func (h *Handler) GetUsageAPIKeyStats(c *gin.Context) {
+	store := h.requireUsageStore(c)
+	if store == nil {
+		return
+	}
+	var body usageQueryBody
+	if c.Request.Method == http.MethodPost {
+		_ = c.ShouldBindJSON(&body)
+	}
+	filter := parseUsageFilter(c, &body)
+	limit := 100
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	stats, err := store.GetAPIKeyStats(c.Request.Context(), filter, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	prices, aliases, ok := h.pricingMaps(c, store)
+	if !ok {
+		return
+	}
+	if costByKey, err := store.CostByAPIKey(c.Request.Context(), filter, prices, aliases); err == nil {
+		for i := range stats {
+			key := usagestore.APIKeyGroupKey(stats[i].APIKey, stats[i].APIKeyHash)
+			stats[i].EstimatedCost = costByKey[key]
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"api_keys": stats, "generated_at_ms": time.Now().UnixMilli()})
+}
+
 // GetModelPrices returns price book + aliases + unpriced models helper.
 func (h *Handler) GetModelPrices(c *gin.Context) {
 	store := h.requireUsageStore(c)
@@ -292,8 +327,8 @@ func (h *Handler) GetModelPrices(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	fromMS := time.Now().AddDate(0, 0, -30).UnixMilli()
-	models, _ := store.ListDistinctModels(c.Request.Context(), fromMS, 200)
+	// Include every model that has usage records (not only recent window).
+	models, _ := store.ListDistinctModels(c.Request.Context(), 0, 2000)
 	aliasMap := usagestore.AliasMap(aliases)
 	unpriced := make([]string, 0)
 	for _, m := range models {
