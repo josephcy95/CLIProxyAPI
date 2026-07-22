@@ -1089,3 +1089,97 @@ func TestCleanJSONSchemaForAntigravity_UniqueItemsStripped(t *testing.T) {
 		t.Errorf("uniqueItems hint missing in description")
 	}
 }
+
+// OpenCode and similar clients emit draft 2020-12 keywords (dependentRequired, etc.)
+// that Gemini/Antigravity reject with:
+//
+//	Unknown name "dependentRequired" at '...function_declarations[N].parameters'
+func TestCleanJSONSchemaForGemini_StripsDependentRequired(t *testing.T) {
+	input := `{
+		"type": "object",
+		"properties": {
+			"owner": {"type": "string"},
+			"repo": {"type": "string"},
+			"path": {"type": "string"}
+		},
+		"required": ["owner"],
+		"dependentRequired": {
+			"owner": ["repo"],
+			"path": ["owner", "repo"]
+		},
+		"unevaluatedProperties": false,
+		"if": {"required": ["path"]},
+		"then": {"required": ["owner", "repo"]},
+		"else": {"type": "object"},
+		"not": {"type": "null"},
+		"prefixItems": [{"type": "string"}],
+		"minContains": 1,
+		"maxContains": 3,
+		"contentEncoding": "base64",
+		"contentMediaType": "application/json",
+		"contentSchema": {"type": "object"},
+		"dependentSchemas": {
+			"owner": {"properties": {"repo": {"type": "string"}}}
+		}
+	}`
+
+	for _, name := range []string{"gemini", "antigravity"} {
+		var result string
+		if name == "gemini" {
+			result = CleanJSONSchemaForGemini(input)
+		} else {
+			result = CleanJSONSchemaForAntigravity(input)
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []string{
+				"dependentRequired",
+				"dependentSchemas",
+				"unevaluatedProperties",
+				"unevaluatedItems",
+				"if",
+				"then",
+				"else",
+				"not",
+				"prefixItems",
+				"minContains",
+				"maxContains",
+				"contentEncoding",
+				"contentMediaType",
+				"contentSchema",
+			} {
+				if gjson.Get(result, key).Exists() {
+					t.Errorf("keyword %s should be stripped, got: %s", key, result)
+				}
+			}
+			if !gjson.Get(result, "properties.owner").Exists() {
+				t.Fatalf("expected properties preserved, got: %s", result)
+			}
+			if !gjson.Get(result, "required").Exists() {
+				t.Fatalf("expected required preserved, got: %s", result)
+			}
+		})
+	}
+}
+
+func TestCleanJSONSchemaForGemini_PreservesPropertyNamedDependentRequired(t *testing.T) {
+	input := `{
+		"type": "object",
+		"properties": {
+			"dependentRequired": {
+				"type": "string",
+				"description": "property name should not be removed"
+			}
+		}
+	}`
+	expected := `{
+		"type": "object",
+		"properties": {
+			"dependentRequired": {
+				"type": "string",
+				"description": "property name should not be removed"
+			}
+		}
+	}`
+	compareJSON(t, expected, CleanJSONSchemaForGemini(input))
+	compareJSON(t, expected, CleanJSONSchemaForAntigravity(input))
+}
