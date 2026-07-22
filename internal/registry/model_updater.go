@@ -219,6 +219,7 @@ func detectChangedProviders(oldData, newData *staticModelsJSON) []string {
 		{"antigravity", oldData.Antigravity, newData.Antigravity},
 		{"xai", oldData.XAI, newData.XAI},
 		{"qodercn", oldData.QoderCN, newData.QoderCN},
+		{"qoder", oldData.Qoder, newData.Qoder},
 	}
 
 	seen := make(map[string]bool, len(sections))
@@ -328,6 +329,9 @@ func preserveLocalProviderCatalogs(oldData, newData *staticModelsJSON) {
 	if len(newData.QoderCN) == 0 && len(oldData.QoderCN) > 0 {
 		newData.QoderCN = oldData.QoderCN
 	}
+	if len(newData.Qoder) == 0 && len(oldData.Qoder) > 0 {
+		newData.Qoder = oldData.Qoder
+	}
 }
 
 func validateModelsCatalog(data *staticModelsJSON) error {
@@ -351,6 +355,7 @@ func validateModelsCatalog(data *staticModelsJSON) error {
 		{name: "antigravity", models: data.Antigravity},
 		{name: "xai", models: data.XAI},
 		{name: "qodercn", models: data.QoderCN},
+		{name: "qoder", models: data.Qoder},
 	}
 
 	for _, section := range requiredSections {

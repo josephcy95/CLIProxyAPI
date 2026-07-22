@@ -13,6 +13,7 @@ func init() {
 	registerRefreshLead("kimi", func() Authenticator { return NewKimiAuthenticator() })
 	registerRefreshLead("xai", func() Authenticator { return NewXAIAuthenticator() })
 	registerRefreshLead("qodercn", func() Authenticator { return NewQoderCNAuthenticator() })
+	registerRefreshLead("qoder", func() Authenticator { return NewQoderAuthenticator() })
 }
 
 func registerRefreshLead(provider string, factory func() Authenticator) {

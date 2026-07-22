@@ -2321,6 +2321,8 @@ func requestToFormat(provider string, executor ProviderExecutor, req cliproxyexe
 		return sdktranslator.FormatOpenAI
 	case "qodercn":
 		return sdktranslator.FormatOpenAI
+	case "qoder":
+		return sdktranslator.FormatOpenAI
 	case "antigravity":
 		return sdktranslator.FormatAntigravity
 	default:

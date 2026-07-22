@@ -994,6 +994,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
 		mgmt.GET("/xai-auth-url", s.mgmt.RequestXAIToken)
 		mgmt.GET("/qodercn-auth-url", s.mgmt.RequestQoderCNToken)
+		mgmt.GET("/qoder-auth-url", s.mgmt.RequestQoderToken)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 		mgmt.DELETE("/oauth-session", s.mgmt.CancelAuthSession)
 	}

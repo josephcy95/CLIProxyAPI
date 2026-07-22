@@ -965,6 +965,7 @@ func baselineExecutorAuths() []*coreauth.Auth {
 		"kimi",
 		"xai",
 		"qodercn",
+		"qoder",
 		"openai-compatibility",
 	}
 	auths := make([]*coreauth.Auth, 0, len(providers))
@@ -1056,6 +1057,8 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 		s.coreManager.RegisterExecutor(executor.NewXAIAutoExecutor(s.cfg))
 	case "qodercn":
 		s.coreManager.RegisterExecutor(executor.NewQoderCNExecutor(s.cfg))
+	case "qoder":
+		s.coreManager.RegisterExecutor(executor.NewQoderExecutor(s.cfg))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
 		if providerKey == "" {
@@ -2003,6 +2006,9 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		models = applyExcludedModels(models, excluded)
 	case "qodercn":
 		models = executor.FetchQoderCNModels(context.Background(), a, s.cfg)
+		models = applyExcludedModels(models, excluded)
+	case "qoder":
+		models = executor.FetchQoderIntlModels(context.Background(), a, s.cfg)
 		models = applyExcludedModels(models, excluded)
 	default:
 		// Handle OpenAI-compatibility providers by name using config

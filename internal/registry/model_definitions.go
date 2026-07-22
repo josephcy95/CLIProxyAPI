@@ -29,6 +29,7 @@ type staticModelsJSON struct {
 	Antigravity []*ModelInfo `json:"antigravity"`
 	XAI         []*ModelInfo `json:"xai"`
 	QoderCN     []*ModelInfo `json:"qodercn"`
+	Qoder       []*ModelInfo `json:"qoder"`
 }
 
 // GetClaudeModels returns the standard Claude model definitions.
@@ -79,6 +80,12 @@ func GetKimiModels() []*ModelInfo {
 // GetQoderCNModels returns static Qoder CN model definitions (live list is preferred).
 func GetQoderCNModels() []*ModelInfo {
 	return cloneModelInfos(getModels().QoderCN)
+}
+
+// GetQoderIntlModels returns static Qoder (international) model definitions
+// (live list is preferred).
+func GetQoderIntlModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Qoder)
 }
 
 // GetAntigravityModels returns the standard Antigravity model definitions.
@@ -304,6 +311,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetXAIModels()
 	case "qodercn", "qoder-cn", "qoder_cn":
 		return GetQoderCNModels()
+	case "qoder":
+		return GetQoderIntlModels()
 	default:
 		return nil
 	}
@@ -327,6 +336,7 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Antigravity,
 		data.XAI,
 		data.QoderCN,
+		data.Qoder,
 	}
 	for _, models := range allModels {
 		for _, m := range models {

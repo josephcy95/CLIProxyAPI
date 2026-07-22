@@ -26,6 +26,7 @@ var oauthProviders = []oauthProvider{
 	{"Kimi", "kimi-auth-url", "🟫", true},
 	{"xAI", "xai-auth-url", "⬛", true},
 	{"Qoder CN", "qodercn-auth-url", "🩷", true},
+	{"Qoder (Intl)", "qoder-auth-url", "💚", true},
 }
 
 // oauthTabModel handles OAuth login flows.
@@ -361,6 +362,8 @@ func (m oauthTabModel) submitCallback(callbackURL string) tea.Cmd {
 					providerKey = "xai"
 				case "qodercn-auth-url":
 					providerKey = "qodercn"
+				case "qoder-auth-url":
+					providerKey = "qoder"
 				}
 				break
 			}

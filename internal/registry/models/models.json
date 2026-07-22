@@ -2696,5 +2696,147 @@
         "IMAGE"
       ]
     }
+  ],
+  "qoder": [
+    {
+      "id": "qoder/auto",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "Auto",
+      "description": "Auto via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/qmodel_preview",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "Qwen3.8-Max-Preview",
+      "description": "Qwen3.8-Max-Preview via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/qmodel_latest",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "Qwen3.7-Max",
+      "description": "Qwen3.7-Max via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/qmodel",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "Qwen3.7-Plus",
+      "description": "Qwen3.7-Plus via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/q36fmodel",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "Qwen3.6-Flash",
+      "description": "Qwen3.6-Flash via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/dmodel",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "DeepSeek-V4-Pro",
+      "description": "DeepSeek-V4-Pro via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/dfmodel",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "DeepSeek-V4-Flash",
+      "description": "DeepSeek-V4-Flash via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/gm51model",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "GLM-5.2",
+      "description": "GLM-5.2 via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/kmodel",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "Kimi-K2.7-Code",
+      "description": "Kimi-K2.7-Code via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    },
+    {
+      "id": "qoder/mmodel",
+      "object": "model",
+      "created": 1767196800,
+      "owned_by": "qoder",
+      "type": "qoder",
+      "display_name": "MiniMax-M2.7",
+      "description": "MiniMax-M2.7 via Qoder",
+      "context_length": 180000,
+      "supported_input_modalities": [
+        "TEXT",
+        "IMAGE"
+      ]
+    }
   ]
 }
