@@ -894,6 +894,11 @@ type OpenAICompatibilityAPIKey struct {
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Priority prefers this key among keys of the same openai-compatibility provider.
+	// Higher values are preferred; defaults to 0. This does not replace the provider-level
+	// Priority used for cross-provider selection.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,

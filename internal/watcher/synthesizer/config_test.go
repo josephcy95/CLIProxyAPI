@@ -504,6 +504,66 @@ func TestConfigSynthesizer_OpenAICompat(t *testing.T) {
 	}
 }
 
+func TestConfigSynthesizer_OpenAICompat_KeyPriority(t *testing.T) {
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			OpenAICompatibility: []config.OpenAICompatibility{
+				{
+					Name:     "CustomProvider",
+					BaseURL:  "https://custom.api.com",
+					Priority: 14,
+					APIKeyEntries: []config.OpenAICompatibilityAPIKey{
+						{APIKey: "key-high", Priority: 2},
+						{APIKey: "key-low", Priority: 1},
+						{APIKey: "key-default"},
+					},
+				},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 3 {
+		t.Fatalf("expected 3 auths, got %d", len(auths))
+	}
+
+	byKey := map[string]*coreauth.Auth{}
+	for _, auth := range auths {
+		if auth == nil || auth.Attributes == nil {
+			continue
+		}
+		byKey[auth.Attributes["api_key"]] = auth
+	}
+
+	high := byKey["key-high"]
+	low := byKey["key-low"]
+	def := byKey["key-default"]
+	if high == nil || low == nil || def == nil {
+		t.Fatalf("missing expected auths: %#v", byKey)
+	}
+
+	for name, auth := range map[string]*coreauth.Auth{"high": high, "low": low, "default": def} {
+		if got := auth.Attributes["priority"]; got != "14" {
+			t.Fatalf("%s attrs.priority = %q, want 14 (provider-level)", name, got)
+		}
+	}
+	if got := high.Attributes["key_priority"]; got != "2" {
+		t.Fatalf("high key_priority = %q, want 2", got)
+	}
+	if got := low.Attributes["key_priority"]; got != "1" {
+		t.Fatalf("low key_priority = %q, want 1", got)
+	}
+	if _, ok := def.Attributes["key_priority"]; ok {
+		t.Fatalf("default key should omit key_priority, got %q", def.Attributes["key_priority"])
+	}
+}
+
 func TestConfigSynthesizer_OpenAICompat_UsesNamespacedProviderKey(t *testing.T) {
 	synth := NewConfigSynthesizer()
 	ctx := &SynthesisContext{

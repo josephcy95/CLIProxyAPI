@@ -279,6 +279,10 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
+			// Per-key priority only ranks keys within this provider; outer ranking uses provider Priority.
+			if entry.Priority != 0 {
+				attrs["key_priority"] = strconv.Itoa(entry.Priority)
+			}
 			if key != "" {
 				attrs["api_key"] = key
 			}

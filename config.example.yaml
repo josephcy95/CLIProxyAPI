@@ -420,11 +420,13 @@ nonstream-keepalive-interval: 0
 #     disable-cooling: false # optional: per-provider override for auth/model cooldown scheduling
 #     headers:
 #       X-Custom-Header: "custom-value"
+#     # priority: 10 # optional: provider-level priority for cross-provider ranking (higher wins)
 #     api-key-entries:
 #       - api-key: "sk-or-v1-...b780"
+#         priority: 10 # optional: prefer this key within this provider only (higher wins)
 #         proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
 #         # proxy-url: "direct" # optional: explicit direct connect for this credential
-#       - api-key: "sk-or-v1-...b781" # without proxy-url
+#       - api-key: "sk-or-v1-...b781" # without proxy-url; lower/omitted priority is used as fallback
 #     models: # The models supported by the provider.
 #       - name: "moonshotai/kimi-k2:free" # The actual model name.
 #         alias: "kimi-k2"               # The alias used in the API.

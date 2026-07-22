@@ -127,6 +127,45 @@ func authPriority(auth *Auth) int {
 	return parsed
 }
 
+// authKeyPriority returns the within-provider key priority used after provider-level priority.
+// Higher values are preferred; missing or invalid values default to 0.
+func authKeyPriority(auth *Auth) int {
+	if auth == nil || auth.Attributes == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(auth.Attributes["key_priority"])
+	if raw == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+// preferHighestKeyPriority keeps only auths with the highest key_priority in the set.
+// Used after provider-level priority filtering so multi-key OpenAI-compat providers can
+// prefer one key without changing cross-provider ranking.
+func preferHighestKeyPriority(auths []*Auth) []*Auth {
+	if len(auths) <= 1 {
+		return auths
+	}
+	best := authKeyPriority(auths[0])
+	for i := 1; i < len(auths); i++ {
+		if kp := authKeyPriority(auths[i]); kp > best {
+			best = kp
+		}
+	}
+	filtered := make([]*Auth, 0, len(auths))
+	for i := 0; i < len(auths); i++ {
+		if authKeyPriority(auths[i]) == best {
+			filtered = append(filtered, auths[i])
+		}
+	}
+	return filtered
+}
+
 func canonicalModelKey(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -246,7 +285,7 @@ func getAvailableAuths(auths []*Auth, provider, model string, now time.Time) ([]
 		}
 	}
 
-	available := availableByPriority[bestPriority]
+	available := preferHighestKeyPriority(availableByPriority[bestPriority])
 	if len(available) > 1 {
 		sort.Slice(available, func(i, j int) bool { return available[i].ID < available[j].ID })
 	}

@@ -89,6 +89,85 @@ func TestRoundRobinSelectorPick_PriorityBuckets(t *testing.T) {
 	}
 }
 
+func TestRoundRobinSelectorPick_KeyPriorityWithinProviderPriority(t *testing.T) {
+	t.Parallel()
+
+	selector := &RoundRobinSelector{}
+	// Same provider-level priority; key_priority should prefer preferred/backup only after preferred cools.
+	auths := []*Auth{
+		{ID: "preferred", Attributes: map[string]string{"priority": "14", "key_priority": "2"}},
+		{ID: "backup", Attributes: map[string]string{"priority": "14", "key_priority": "1"}},
+		{ID: "last", Attributes: map[string]string{"priority": "14"}},
+	}
+
+	for i := 0; i < 3; i++ {
+		got, err := selector.Pick(context.Background(), "openai-compatible-demo", "", cliproxyexecutor.Options{}, auths)
+		if err != nil {
+			t.Fatalf("Pick() #%d error = %v", i, err)
+		}
+		if got == nil || got.ID != "preferred" {
+			t.Fatalf("Pick() #%d auth.ID = %v, want preferred", i, got)
+		}
+	}
+}
+
+func TestFillFirstSelectorPick_KeyPriorityFallbackCooldown(t *testing.T) {
+	t.Parallel()
+
+	selector := &FillFirstSelector{}
+	now := time.Now()
+	model := "test-model"
+
+	preferred := &Auth{
+		ID:         "preferred",
+		Attributes: map[string]string{"priority": "14", "key_priority": "10"},
+		ModelStates: map[string]*ModelState{
+			model: {
+				Status:         StatusActive,
+				Unavailable:    true,
+				NextRetryAfter: now.Add(30 * time.Minute),
+				Quota: QuotaState{
+					Exceeded: true,
+				},
+			},
+		},
+	}
+	backup := &Auth{ID: "backup", Attributes: map[string]string{"priority": "14", "key_priority": "1"}}
+
+	got, err := selector.Pick(context.Background(), "openai-compatible-demo", model, cliproxyexecutor.Options{}, []*Auth{preferred, backup})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil {
+		t.Fatalf("Pick() auth = nil")
+	}
+	if got.ID != "backup" {
+		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, "backup")
+	}
+}
+
+func TestRoundRobinSelectorPick_KeyPriorityDoesNotBeatOuterProviderPriority(t *testing.T) {
+	t.Parallel()
+
+	selector := &RoundRobinSelector{}
+	// Provider A at priority 14 with low key_priority must still beat provider B at priority 10
+	// even when B's key has a very high key_priority.
+	auths := []*Auth{
+		{ID: "a-low-key", Attributes: map[string]string{"priority": "14", "key_priority": "0"}},
+		{ID: "b-high-key", Attributes: map[string]string{"priority": "10", "key_priority": "99"}},
+	}
+
+	for i := 0; i < 3; i++ {
+		got, err := selector.Pick(context.Background(), "mixed", "", cliproxyexecutor.Options{}, auths)
+		if err != nil {
+			t.Fatalf("Pick() #%d error = %v", i, err)
+		}
+		if got == nil || got.ID != "a-low-key" {
+			t.Fatalf("Pick() #%d auth.ID = %v, want a-low-key (outer provider priority)", i, got)
+		}
+	}
+}
+
 func TestFillFirstSelectorPick_PriorityFallbackCooldown(t *testing.T) {
 	t.Parallel()
 

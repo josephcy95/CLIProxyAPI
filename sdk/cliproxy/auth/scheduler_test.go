@@ -143,6 +143,53 @@ func TestSchedulerPick_RoundRobinHighestPriority(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_KeyPriorityWithinProvider(t *testing.T) {
+	t.Parallel()
+
+	provider := "openai-compatible-demo"
+	scheduler := newSchedulerForTest(
+		&RoundRobinSelector{},
+		&Auth{ID: "preferred", Provider: provider, Attributes: map[string]string{"priority": "14", "key_priority": "2"}},
+		&Auth{ID: "backup", Provider: provider, Attributes: map[string]string{"priority": "14", "key_priority": "1"}},
+		&Auth{ID: "last", Provider: provider, Attributes: map[string]string{"priority": "14"}},
+	)
+
+	for index := 0; index < 3; index++ {
+		got, errPick := scheduler.pickSingle(context.Background(), provider, "", cliproxyexecutor.Options{}, nil)
+		if errPick != nil {
+			t.Fatalf("pickSingle() #%d error = %v", index, errPick)
+		}
+		if got == nil || got.ID != "preferred" {
+			t.Fatalf("pickSingle() #%d auth.ID = %v, want preferred", index, got)
+		}
+	}
+}
+
+func TestSchedulerPick_KeyPriorityFallbackWhenTried(t *testing.T) {
+	t.Parallel()
+
+	provider := "openai-compatible-demo"
+	scheduler := newSchedulerForTest(
+		&RoundRobinSelector{},
+		&Auth{ID: "preferred", Provider: provider, Attributes: map[string]string{"priority": "14", "key_priority": "2"}},
+		&Auth{ID: "backup", Provider: provider, Attributes: map[string]string{"priority": "14", "key_priority": "1"}},
+	)
+
+	got, errPick := scheduler.pickSingle(
+		context.Background(),
+		provider,
+		"",
+		cliproxyexecutor.Options{},
+		map[string]struct{}{"preferred": {}},
+	)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != "backup" {
+		t.Fatalf("pickSingle() auth.ID = %v, want backup", got)
+	}
+}
+
 func TestSchedulerPick_FillFirstSticksToFirstReady(t *testing.T) {
 	t.Parallel()
 

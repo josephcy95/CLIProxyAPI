@@ -52,6 +52,7 @@ type scheduledAuthMeta struct {
 	auth              *Auth
 	providerKey       string
 	priority          int
+	keyPriority       int
 	websocketEnabled  bool
 	supportedModelSet map[string]struct{}
 }
@@ -561,6 +562,7 @@ func buildScheduledAuthMeta(auth *Auth) *scheduledAuthMeta {
 		auth:              auth,
 		providerKey:       providerKey,
 		priority:          authPriority(auth),
+		keyPriority:       authKeyPriority(auth),
 		websocketEnabled:  authWebsocketsEnabled(auth),
 		supportedModelSet: supportedModelSetForAuth(auth.ID),
 	}
@@ -672,9 +674,11 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 	previousState := entry.state
 	previousNextRetryAt := entry.nextRetryAt
 	previousPriority := 0
+	previousKeyPriority := 0
 	previousWebsocketEnabled := false
 	if entry.meta != nil {
 		previousPriority = entry.meta.priority
+		previousKeyPriority = entry.meta.keyPriority
 		previousWebsocketEnabled = entry.meta.websocketEnabled
 	}
 
@@ -695,7 +699,7 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 		entry.nextRetryAt = next
 	}
 
-	if ok && previousState == entry.state && previousNextRetryAt.Equal(entry.nextRetryAt) && previousPriority == meta.priority && previousWebsocketEnabled == meta.websocketEnabled {
+	if ok && previousState == entry.state && previousNextRetryAt.Equal(entry.nextRetryAt) && previousPriority == meta.priority && previousKeyPriority == meta.keyPriority && previousWebsocketEnabled == meta.websocketEnabled {
 		return
 	}
 	m.rebuildIndexesLocked()
@@ -793,6 +797,8 @@ func (m *modelScheduler) highestReadyPriorityLocked(preferWebsocket bool, predic
 }
 
 // pickReadyAtPriorityLocked selects the next ready auth from a specific priority bucket.
+// Among matching ready entries, only the highest key_priority tier is considered so
+// multi-key OpenAI-compat providers can prefer one key without changing outer ranking.
 // The caller must ensure expired entries are already promoted when needed.
 func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priority int, strategy schedulerStrategy, predicate func(*scheduledAuth) bool) *Auth {
 	if m == nil {
@@ -806,11 +812,12 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	if preferWebsocket && bucket.ws.pickFirst(predicate) != nil {
 		view = &bucket.ws
 	}
+	keyPredicate := withHighestKeyPriority(view, predicate)
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
-		picked = view.pickFirst(predicate)
+		picked = view.pickFirst(keyPredicate)
 	} else {
-		picked = view.pickRoundRobin(predicate)
+		picked = view.pickRoundRobin(keyPredicate)
 	}
 	if picked == nil || picked.auth == nil {
 		return nil
@@ -826,10 +833,79 @@ func (m *modelScheduler) readyCountAtPriorityLocked(preferWebsocket bool, priori
 	if bucket == nil {
 		return 0
 	}
+	view := &bucket.all
 	if preferWebsocket && len(bucket.ws.flat) > 0 {
-		return len(bucket.ws.flat)
+		view = &bucket.ws
 	}
-	return len(bucket.all.flat)
+	if view == nil || len(view.flat) == 0 {
+		return 0
+	}
+	bestKeyPriority := 0
+	found := false
+	for _, entry := range view.flat {
+		if entry == nil || entry.meta == nil {
+			continue
+		}
+		if !found || entry.meta.keyPriority > bestKeyPriority {
+			bestKeyPriority = entry.meta.keyPriority
+			found = true
+		}
+	}
+	if !found {
+		return 0
+	}
+	count := 0
+	for _, entry := range view.flat {
+		if entry == nil || entry.meta == nil {
+			continue
+		}
+		if entry.meta.keyPriority == bestKeyPriority {
+			count++
+		}
+	}
+	return count
+}
+
+// withHighestKeyPriority wraps a predicate so only ready entries at the highest
+// key_priority among currently matching candidates are eligible.
+func withHighestKeyPriority(view *readyView, predicate func(*scheduledAuth) bool) func(*scheduledAuth) bool {
+	if view == nil || len(view.flat) == 0 {
+		return predicate
+	}
+	best := 0
+	found := false
+	for _, entry := range view.flat {
+		if entry == nil {
+			continue
+		}
+		if predicate != nil && !predicate(entry) {
+			continue
+		}
+		kp := 0
+		if entry.meta != nil {
+			kp = entry.meta.keyPriority
+		}
+		if !found || kp > best {
+			best = kp
+			found = true
+		}
+	}
+	if !found {
+		return predicate
+	}
+	return func(entry *scheduledAuth) bool {
+		if entry == nil {
+			return false
+		}
+		if predicate != nil && !predicate(entry) {
+			return false
+		}
+		kp := 0
+		if entry.meta != nil {
+			kp = entry.meta.keyPriority
+		}
+		return kp == best
+	}
 }
 
 // unavailableErrorLocked returns the correct unavailable or cooldown error for the shard.
