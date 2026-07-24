@@ -29,6 +29,7 @@ func applyBuiltinPreUnmarshalDefaults(cfg *Config) {
 	cfg.UsageStatisticsEnabled = false
 	cfg.RedisUsageQueueRetentionSeconds = 60
 	cfg.DisableCooling = false
+	cfg.SaveCooldownStatus = false
 	cfg.TransientErrorCooldownSeconds = 0
 	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.XAI = DefaultXAIConfig()
@@ -37,6 +38,7 @@ func applyBuiltinPreUnmarshalDefaults(cfg *Config) {
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
+	cfg.CredentialInFlight = DefaultCredentialInFlightConfig()
 	cfg.RequestRetry = 3
 	cfg.MaxRetryCredentials = 0
 	cfg.MaxRetryInterval = 30

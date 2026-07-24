@@ -42,6 +42,12 @@ type Config struct {
 	// Home config is runtime-only and is populated from -home-jwt.
 	Home HomeConfig `yaml:"-" json:"-"`
 
+	// CredentialConcurrency contains Home-authoritative credential lifecycle settings.
+	CredentialConcurrency CredentialConcurrencyConfig `yaml:"credential-concurrency" json:"credential-concurrency"`
+
+	// CredentialInFlight configures credential observation snapshots.
+	CredentialInFlight CredentialInFlightConfig `yaml:"credential-in-flight" json:"credential-in-flight"`
+
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
 
@@ -90,6 +96,9 @@ type Config struct {
 
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
+
+	// SaveCooldownStatus persists runtime cooldown status next to auth files when true.
+	SaveCooldownStatus bool `yaml:"save-cooldown-status" json:"save-cooldown-status"`
 
 	// TransientErrorCooldownSeconds controls cooldowns for transient upstream errors.
 	// 0 keeps the legacy default cooldown. Negative values disable these cooldowns.
@@ -960,7 +969,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		if optional {
 			if os.IsNotExist(err) || errors.Is(err, syscall.EISDIR) {
 				// Missing and optional: return empty config (cloud deploy standby).
-				cfg := &Config{}
+				cfg := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
 				cfg.NormalizePluginsConfig()
 				return cfg, nil
 			}
@@ -969,8 +978,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	}
 
 	// In cloud deploy mode (optional=true), if file is empty or contains only whitespace, return empty config.
-	if optional && len(data) == 0 {
-		cfg := &Config{}
+	if optional && len(bytes.TrimSpace(data)) == 0 {
+		cfg := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
 		cfg.NormalizePluginsConfig()
 		return cfg, nil
 	}
@@ -982,7 +991,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
-			cfgOptional := &Config{}
+			cfgOptional := &Config{CredentialInFlight: DefaultCredentialInFlightConfig()}
 			cfgOptional.NormalizePluginsConfig()
 			return cfgOptional, nil
 		}
@@ -1008,6 +1017,11 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 				}
 			}
 		}
+	}
+
+	cfg.CredentialConcurrency = cfg.CredentialConcurrency.WithDefaults()
+	if errValidate := cfg.CredentialInFlight.Validate(); errValidate != nil {
+		return nil, errValidate
 	}
 
 	// Hash remote management key if plaintext is detected (nested)
