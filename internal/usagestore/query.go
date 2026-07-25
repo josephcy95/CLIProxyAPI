@@ -469,6 +469,10 @@ func APIKeyGroupKey(apiKey, apiKeyHash string) string {
 }
 
 // GetFilterOptions returns distinct filter values for dropdowns.
+// Each facet is loaded with every other active filter applied, but without its
+// own constraint, so choosing e.g. a provider narrows models/sources/api keys
+// to values that co-occur in usage data while still allowing the user to switch
+// within the same facet.
 func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (FilterOptions, error) {
 	var out FilterOptions
 	if s == nil {
@@ -476,20 +480,14 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 	}
 	filter.BeforeID = 0
 	filter.Limit = 0
-	// Drop facet-specific filters so options stay useful.
-	base := filter
-	base.Models = nil
-	base.Providers = nil
-	base.AuthIndices = nil
-	base.Sources = nil
-	base.APIKeys = nil
-	base.APIKeyHashes = nil
-	base.FailedOnly = false
-	base.SuccessOnly = false
-	base.Search = ""
+	// Free-text search is for event rows, not structured facet menus.
+	filter.Search = ""
 
-	load := func(column string) ([]string, error) {
-		where, args := buildWhere(base)
+	load := func(column string, facet QueryFilter) ([]string, error) {
+		facet.BeforeID = 0
+		facet.Limit = 0
+		facet.Search = ""
+		where, args := buildWhere(facet)
 		var query string
 		if where == "" {
 			query = fmt.Sprintf(`SELECT DISTINCT %s FROM usage_events WHERE IFNULL(%s,'') <> '' ORDER BY %s LIMIT 200`, column, column, column)
@@ -512,23 +510,42 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 		return values, rows.Err()
 	}
 
+	// Clear only the facet being loaded so other active filters cascade.
+	modelsFacet := filter
+	modelsFacet.Models = nil
+
+	providersFacet := filter
+	providersFacet.Providers = nil
+
+	authFacet := filter
+	authFacet.AuthIndices = nil
+
+	sourcesFacet := filter
+	sourcesFacet.Sources = nil
+
+	apiKeysFacet := filter
+	apiKeysFacet.APIKeys = nil
+
+	apiKeyHashesFacet := filter
+	apiKeyHashesFacet.APIKeyHashes = nil
+
 	var err error
-	if out.Models, err = load("model"); err != nil {
+	if out.Models, err = load("model", modelsFacet); err != nil {
 		return out, err
 	}
-	if out.Providers, err = load("provider"); err != nil {
+	if out.Providers, err = load("provider", providersFacet); err != nil {
 		return out, err
 	}
-	if out.AuthIndices, err = load("auth_index"); err != nil {
+	if out.AuthIndices, err = load("auth_index", authFacet); err != nil {
 		return out, err
 	}
-	if out.Sources, err = load("source"); err != nil {
+	if out.Sources, err = load("source", sourcesFacet); err != nil {
 		return out, err
 	}
-	if out.APIKeys, err = load("api_key"); err != nil {
+	if out.APIKeys, err = load("api_key", apiKeysFacet); err != nil {
 		return out, err
 	}
-	if out.APIKeyHashes, err = load("api_key_hash"); err != nil {
+	if out.APIKeyHashes, err = load("api_key_hash", apiKeyHashesFacet); err != nil {
 		return out, err
 	}
 	return out, nil

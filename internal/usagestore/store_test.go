@@ -149,6 +149,101 @@ func TestMaskAndHash(t *testing.T) {
 	}
 }
 
+func TestGetFilterOptionsCascadesAcrossFacets(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Options{Path: filepath.Join(dir, "usage-cascade.db"), RetentionDays: 30})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now().UnixMilli()
+	events := []Event{
+		{
+			TimestampMS: now - 3000, Model: "gpt-4o", Provider: "openai",
+			Source: "alice@example.com", APIKey: "sk-alice",
+			InputTokens: 10, OutputTokens: 5, TotalTokens: 15,
+		},
+		{
+			TimestampMS: now - 2000, Model: "claude-sonnet", Provider: "anthropic",
+			Source: "bob@example.com", APIKey: "sk-bob",
+			InputTokens: 20, OutputTokens: 8, TotalTokens: 28,
+		},
+		{
+			TimestampMS: now - 1000, Model: "gpt-4o-mini", Provider: "openai",
+			Source: "alice@example.com", APIKey: "sk-alice",
+			InputTokens: 12, OutputTokens: 4, TotalTokens: 16,
+		},
+	}
+	for _, e := range events {
+		if err := store.Insert(context.Background(), e); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+	}
+
+	// Provider = openai should narrow models/sources/api keys to openai co-occurrence.
+	opts, err := store.GetFilterOptions(context.Background(), QueryFilter{Providers: []string{"openai"}})
+	if err != nil {
+		t.Fatalf("GetFilterOptions provider: %v", err)
+	}
+	if !stringSliceEqual(opts.Models, []string{"gpt-4o", "gpt-4o-mini"}) {
+		t.Fatalf("models under openai = %#v, want gpt-4o + gpt-4o-mini", opts.Models)
+	}
+	if !stringSliceEqual(opts.Sources, []string{"alice@example.com"}) {
+		t.Fatalf("sources under openai = %#v", opts.Sources)
+	}
+	if !stringSliceEqual(opts.APIKeys, []string{"sk-alice"}) {
+		t.Fatalf("api_keys under openai = %#v", opts.APIKeys)
+	}
+	// Own facet stays switchable: providers list is still full under only time range peers.
+	if !stringSliceEqual(opts.Providers, []string{"anthropic", "openai"}) {
+		t.Fatalf("providers with provider filter excluded = %#v", opts.Providers)
+	}
+
+	// Model = claude-sonnet should collapse everything to the anthropic row.
+	opts, err = store.GetFilterOptions(context.Background(), QueryFilter{Models: []string{"claude-sonnet"}})
+	if err != nil {
+		t.Fatalf("GetFilterOptions model: %v", err)
+	}
+	if !stringSliceEqual(opts.Providers, []string{"anthropic"}) {
+		t.Fatalf("providers under claude-sonnet = %#v", opts.Providers)
+	}
+	if !stringSliceEqual(opts.APIKeys, []string{"sk-bob"}) {
+		t.Fatalf("api_keys under claude-sonnet = %#v", opts.APIKeys)
+	}
+	// Own facet still lists other models so the user can switch models.
+	if !stringSliceEqual(opts.Models, []string{"claude-sonnet", "gpt-4o", "gpt-4o-mini"}) {
+		t.Fatalf("models with model filter excluded = %#v", opts.Models)
+	}
+
+	// Combined filters cascade further.
+	opts, err = store.GetFilterOptions(context.Background(), QueryFilter{
+		Providers: []string{"openai"},
+		APIKeys:   []string{"sk-alice"},
+	})
+	if err != nil {
+		t.Fatalf("GetFilterOptions combined: %v", err)
+	}
+	if !stringSliceEqual(opts.Models, []string{"gpt-4o", "gpt-4o-mini"}) {
+		t.Fatalf("models under openai+sk-alice = %#v", opts.Models)
+	}
+	if !stringSliceEqual(opts.Sources, []string{"alice@example.com"}) {
+		t.Fatalf("sources under openai+sk-alice = %#v", opts.Sources)
+	}
+}
+
+func stringSliceEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || (len(s) > 0 && (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {
