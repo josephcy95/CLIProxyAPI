@@ -315,8 +315,12 @@ type CodexConfig struct {
 	UsageLimitDisableAfter *int `yaml:"usage-limit-disable-after,omitempty" json:"usage-limit-disable-after,omitempty"`
 	// UsageLimitCooldownFallbackHours is used when usage_limit_reached has no resets_at /
 	// resets_in_seconds. Set 0 to keep the short progressive quota backoff only.
-	UsageLimitCooldownFallbackHours *int                    `yaml:"usage-limit-cooldown-fallback-hours,omitempty" json:"usage-limit-cooldown-fallback-hours,omitempty"`
-	Instructions                    CodexInstructionsConfig `yaml:"instructions" json:"instructions"`
+	UsageLimitCooldownFallbackHours *int `yaml:"usage-limit-cooldown-fallback-hours,omitempty" json:"usage-limit-cooldown-fallback-hours,omitempty"`
+	// OptimizeMultiAgentV2 optimizes official Codex multi-agent requests.
+	OptimizeMultiAgentV2 bool `yaml:"optimize-multi-agent-v2" json:"optimize-multi-agent-v2"`
+	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
+	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
+	Instructions   CodexInstructionsConfig   `yaml:"instructions" json:"instructions"`
 }
 
 // DefaultCodexFailurePolicy returns Codex credential failure defaults when keys are omitted.
@@ -519,6 +523,24 @@ type CodexInstructionsConfig struct {
 type CodexInstructionMarkersConfig struct {
 	Prefixes []string `yaml:"prefixes,omitempty" json:"prefixes,omitempty"`
 	Suffixes []string `yaml:"suffixes,omitempty" json:"suffixes,omitempty"`
+}
+
+// CodexLiveMediaRelayConfig configures the in-process Codex Live WebRTC gateway.
+type CodexLiveMediaRelayConfig struct {
+	Enabled                 bool                 `yaml:"enabled" json:"enabled"`
+	MaxSessions             int                  `yaml:"max-sessions" json:"max-sessions"`
+	DisablePrivateRemoteIPs bool                 `yaml:"disable-private-remote-ips" json:"disable-private-remote-ips"`
+	PublicIP                string               `yaml:"public-ip" json:"public-ip"`
+	UDPPortMin              uint16               `yaml:"udp-port-min" json:"udp-port-min"`
+	UDPPortMax              uint16               `yaml:"udp-port-max" json:"udp-port-max"`
+	ICEServers              []CodexLiveICEServer `yaml:"ice-servers" json:"ice-servers"`
+}
+
+// CodexLiveICEServer configures a STUN or TURN server for the media relay.
+type CodexLiveICEServer struct {
+	URLs       []string `yaml:"urls" json:"urls"`
+	Username   string   `yaml:"username" json:"-"`
+	Credential string   `yaml:"credential" json:"-"`
 }
 
 // TLSConfig holds HTTPS server settings.
@@ -1021,6 +1043,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	cfg.CredentialConcurrency = cfg.CredentialConcurrency.WithDefaults()
 	if errValidate := cfg.CredentialInFlight.Validate(); errValidate != nil {
+		return nil, errValidate
+	}
+	if errValidate := cfg.Codex.LiveMediaRelay.Validate(); errValidate != nil {
 		return nil, errValidate
 	}
 
