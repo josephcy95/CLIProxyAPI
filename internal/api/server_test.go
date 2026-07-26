@@ -1860,3 +1860,92 @@ func TestInteractionsRouteRegistered(t *testing.T) {
 		t.Fatalf("status = %d, want route registered; body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// managementRouteContract lists every management route the web UI depends on.
+// An upstream refactor that relocates route registration can silently drop
+// entries (this happened once: the monitoring endpoints disappeared and the UI
+// started 404ing), so pin the contract here. Add new routes as they ship; only
+// remove an entry when the endpoint is intentionally retired.
+var managementRouteContract = []struct {
+	method string
+	path   string
+}{
+	// Usage monitoring (Monitoring page).
+	{http.MethodGet, "/v0/management/usage-events"},
+	{http.MethodPost, "/v0/management/usage-events"},
+	{http.MethodGet, "/v0/management/usage-summary"},
+	{http.MethodPost, "/v0/management/usage-summary"},
+	{http.MethodGet, "/v0/management/usage-filter-options"},
+	{http.MethodPost, "/v0/management/usage-filter-options"},
+	{http.MethodGet, "/v0/management/usage-account-stats"},
+	{http.MethodPost, "/v0/management/usage-account-stats"},
+	{http.MethodGet, "/v0/management/usage-api-key-stats"},
+	{http.MethodPost, "/v0/management/usage-api-key-stats"},
+	{http.MethodGet, "/v0/management/usage-queue"},
+	{http.MethodGet, "/v0/management/api-key-usage"},
+	// Model pricing.
+	{http.MethodGet, "/v0/management/model-prices"},
+	{http.MethodPut, "/v0/management/model-prices"},
+	{http.MethodDelete, "/v0/management/model-prices"},
+	{http.MethodPut, "/v0/management/model-price-aliases"},
+	{http.MethodDelete, "/v0/management/model-price-aliases"},
+	{http.MethodPost, "/v0/management/model-prices/sync"},
+	// Provider-specific config pages.
+	{http.MethodGet, "/v0/management/xai-config"},
+	{http.MethodPut, "/v0/management/xai-config"},
+	{http.MethodGet, "/v0/management/codex-instructions"},
+	{http.MethodPut, "/v0/management/codex-instructions"},
+	{http.MethodGet, "/v0/management/codex-failure-config"},
+	{http.MethodPut, "/v0/management/codex-failure-config"},
+	// Model metadata (Dashboard tooltip + Model Context page).
+	{http.MethodGet, "/v0/management/model-sources"},
+	{http.MethodGet, "/v0/management/model-context-status"},
+	{http.MethodGet, "/v0/management/model-context-overrides"},
+	{http.MethodPut, "/v0/management/model-context-overrides"},
+	{http.MethodPatch, "/v0/management/model-context-overrides"},
+	{http.MethodDelete, "/v0/management/model-context-overrides"},
+	// OAuth entry points.
+	{http.MethodGet, "/v0/management/anthropic-auth-url"},
+	{http.MethodGet, "/v0/management/codex-auth-url"},
+	{http.MethodGet, "/v0/management/antigravity-auth-url"},
+	{http.MethodGet, "/v0/management/kimi-auth-url"},
+	{http.MethodGet, "/v0/management/xai-auth-url"},
+	{http.MethodGet, "/v0/management/qoder-auth-url"},
+	{http.MethodGet, "/v0/management/qodercn-auth-url"},
+	// Auth files.
+	{http.MethodGet, "/v0/management/auth-files"},
+	{http.MethodGet, "/v0/management/auth-files/models"},
+	{http.MethodPatch, "/v0/management/auth-files/status"},
+	{http.MethodPatch, "/v0/management/auth-files/fields"},
+	// Core config surfaces.
+	{http.MethodGet, "/v0/management/config"},
+	{http.MethodGet, "/v0/management/api-keys"},
+	{http.MethodGet, "/v0/management/logs"},
+	{http.MethodGet, "/v0/management/request-log"},
+	{http.MethodGet, "/v0/management/plugins"},
+}
+
+// TestManagementRoutesAreRegistered guards the route contract above. It asserts
+// only that each route resolves to a handler: any status other than 404 (and
+// 405, which would mean the path exists but not for that verb) counts as
+// registered, so handler-level failures do not make this test flaky.
+func TestManagementRoutesAreRegistered(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
+
+	server := newTestServer(t)
+	if errWrite := os.WriteFile(server.configFilePath, []byte("{}\n"), 0o600); errWrite != nil {
+		t.Fatalf("failed to write config file: %v", errWrite)
+	}
+
+	registered := make(map[string]struct{})
+	for _, route := range server.engine.Routes() {
+		registered[route.Method+" "+route.Path] = struct{}{}
+	}
+
+	for _, want := range managementRouteContract {
+		key := want.method + " " + want.path
+		if _, ok := registered[key]; !ok {
+			t.Errorf("management route not registered: %s", key)
+		}
+	}
+}
