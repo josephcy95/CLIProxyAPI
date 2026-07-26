@@ -156,7 +156,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		if errClose := errBody.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
-		err = statusErr{code: httpResp.StatusCode, msg: string(b)}
+		// Honor upstream reset hints so an exhausted account is not retried on the
+		// generic 1s backoff ladder.
+		err = statusErr{code: httpResp.StatusCode, msg: string(b), retryAfter: claudeRetryAfterFromResponse(httpResp.Header, b)}
 		return nil, err
 	}
 	decodedBody, err := decodeResponseBody(httpResp.Body, httpResp.Header.Get("Content-Encoding"))

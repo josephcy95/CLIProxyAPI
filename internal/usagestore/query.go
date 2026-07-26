@@ -218,8 +218,8 @@ func (s *Store) GetSummary(ctx context.Context, filter QueryFilter) (Summary, er
 	where, args := buildWhere(filter)
 	query := `SELECT
 		COUNT(*),
-		SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
 		IFNULL(SUM(input_tokens),0),
 		IFNULL(SUM(output_tokens),0),
 		IFNULL(SUM(reasoning_tokens),0),
@@ -262,8 +262,8 @@ func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit i
 	query := `SELECT
 		IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
 		COUNT(*),
-		SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
 		IFNULL(SUM(total_tokens),0),
 		IFNULL(SUM(input_tokens),0),
 		IFNULL(SUM(output_tokens),0)
@@ -396,8 +396,8 @@ func (s *Store) GetAPIKeyStats(ctx context.Context, filter QueryFilter, limit in
 	query := `SELECT
 		IFNULL(api_key,''), IFNULL(api_key_hash,''),
 		COUNT(*),
-		SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
 		IFNULL(SUM(total_tokens),0),
 		IFNULL(SUM(input_tokens),0),
 		IFNULL(SUM(output_tokens),0)

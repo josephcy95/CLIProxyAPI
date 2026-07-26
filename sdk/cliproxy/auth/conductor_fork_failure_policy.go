@@ -106,6 +106,12 @@ func (m *Manager) xaiExhaustionKindForResult(result Result) xaiExhaustionKind {
 	return ""
 }
 
+// claudeRateLimitFallbackCooldown is used when Anthropic returns 429 without any
+// Retry-After header or resets_at body hint. Anthropic 5-hour windows are the
+// common case, so a 5-minute recheck is frequent enough to pick the account back
+// up quickly without retrying a genuinely exhausted credential every second.
+const claudeRateLimitFallbackCooldown = 5 * time.Minute
+
 // effectiveRetryAfterForResult returns the provider RetryAfter when present; otherwise, for
 // known xAI free-usage / other-403 or Codex usage-limit failures, the configured fallback.
 func (m *Manager) effectiveRetryAfterForResult(result Result) *time.Duration {
@@ -130,6 +136,15 @@ func (m *Manager) effectiveRetryAfterForResult(result Result) *time.Duration {
 		}
 		if result.Error.HTTPStatus == http.StatusForbidden && !isXAIPermissionDeniedError(result.Error) {
 			d := time.Duration(policy.OtherForbiddenCooldownHoursValue()) * time.Hour
+			return &d
+		}
+	case "claude":
+		// Anthropic 429s carry their reset time in headers/body, which the executor
+		// surfaces as result.RetryAfter (handled above). When it is absent, fall back
+		// to a fixed cooldown instead of the 1s-and-doubling quota ladder, which would
+		// hammer an account whose 5-hour or weekly window is genuinely exhausted.
+		if result.Error.HTTPStatus == http.StatusTooManyRequests {
+			d := claudeRateLimitFallbackCooldown
 			return &d
 		}
 	case "codex":
