@@ -199,7 +199,6 @@ func TestApplyCodexConfiguredInstructionsSkipsNonMatchingModel(t *testing.T) {
 	}
 }
 
-
 func TestApplyCodexConfiguredInstructionsSkipsWithoutPrivateMarker(t *testing.T) {
 	executor := NewCodexExecutor(&config.Config{Codex: config.CodexConfig{Instructions: config.CodexInstructionsConfig{
 		Enabled: true,

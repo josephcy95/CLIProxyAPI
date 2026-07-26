@@ -321,10 +321,10 @@ func (h *Handler) PutXAIConfig(c *gin.Context) {
 func (h *Handler) GetCodexFailureConfig(c *gin.Context) {
 	normalized := config.NormalizeCodexConfig(h.cfg.Codex)
 	c.JSON(http.StatusOK, gin.H{
-		"auto-disable-auth-failures":           normalized.AutoDisableAuthFailures,
-		"auth-failure-disable-after":           normalized.AuthFailureDisableAfter,
-		"usage-limit-disable-after":            normalized.UsageLimitDisableAfter,
-		"usage-limit-cooldown-fallback-hours":  normalized.UsageLimitCooldownFallbackHours,
+		"auto-disable-auth-failures":          normalized.AutoDisableAuthFailures,
+		"auth-failure-disable-after":          normalized.AuthFailureDisableAfter,
+		"usage-limit-disable-after":           normalized.UsageLimitDisableAfter,
+		"usage-limit-cooldown-fallback-hours": normalized.UsageLimitCooldownFallbackHours,
 	})
 }
 

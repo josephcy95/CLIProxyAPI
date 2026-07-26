@@ -43,7 +43,7 @@ func TestXAIStatusErr_UsesConfiguredCooldowns(t *testing.T) {
 	freeUsageCooldown := 3
 	autoDisable := true
 	cfg := &config.Config{XAI: config.XAIConfig{
-		AutoDisablePermissionDenied:       &autoDisable,
+		AutoDisablePermissionDenied:     &autoDisable,
 		OtherForbiddenCooldownHours:     &otherForbiddenCooldown,
 		FreeUsageExhaustedCooldownHours: &freeUsageCooldown,
 	}}
