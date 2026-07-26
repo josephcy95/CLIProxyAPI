@@ -526,6 +526,17 @@ nonstream-keepalive-interval: 0
 #       - "imagen-3.0-generate-002"
 #       - "imagen-*"
 
+# Manual model context windows
+# The bundled model catalog is matched by exact model ID, so custom providers that use
+# non-standard model names end up with no context window in /v1/models. Tools that size
+# requests from the advertised window need a value; set it here (or from the management
+# UI, which lists every model that is still missing one).
+# Matching is case-insensitive. Values <= 0 are ignored.
+# model-context-overrides:
+#   - model: "my-provider/custom-llm"
+#     context-length: 262144
+#     max-completion-tokens: 8192
+
 # Global OAuth model name aliases (per channel)
 # These aliases rename model IDs for both model listing and request routing.
 # Supported channels: vertex, aistudio, antigravity, claude, codex, kimi, xai.

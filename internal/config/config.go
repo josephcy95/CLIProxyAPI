@@ -187,8 +187,65 @@ type Config struct {
 	// gemini-api-key, interactions-api-key, codex-api-key, xai-api-key, claude-api-key, openai-compatibility, and vertex-api-key.
 	OAuthModelAlias map[string][]OAuthModelAlias `yaml:"oauth-model-alias,omitempty" json:"oauth-model-alias,omitempty"`
 
+	// ModelContextOverrides defines manual context window metadata for models whose
+	// values cannot be resolved from the bundled model catalog. Custom providers often
+	// use model names that match no catalog entry, so no context window is advertised
+	// for them; clients that size requests from the advertised window need a value.
+	// Note: no omitempty. Emptying the list must be written to disk, otherwise a
+	// deleted override would silently survive in the on-disk config.
+	ModelContextOverrides []ModelContextOverride `yaml:"model-context-overrides" json:"model-context-overrides"`
+
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
+}
+
+// ModelContextOverride assigns a manual context window to a single model ID.
+type ModelContextOverride struct {
+	// Model is the model ID as advertised by the proxy (alias after prefixing).
+	// Matching is case-insensitive.
+	Model string `yaml:"model" json:"model"`
+
+	// ContextLength is the context window in tokens. Values <= 0 are ignored.
+	ContextLength int `yaml:"context-length,omitempty" json:"context-length,omitempty"`
+
+	// MaxCompletionTokens is the maximum completion size in tokens. Values <= 0 are ignored.
+	MaxCompletionTokens int `yaml:"max-completion-tokens,omitempty" json:"max-completion-tokens,omitempty"`
+}
+
+// SanitizeModelContextOverrides trims model IDs, drops entries without a usable
+// value, clamps negatives to zero, and keeps the last entry for duplicate models.
+func (c *Config) SanitizeModelContextOverrides() {
+	if c == nil || len(c.ModelContextOverrides) == 0 {
+		return
+	}
+
+	seen := make(map[string]int, len(c.ModelContextOverrides))
+	out := make([]ModelContextOverride, 0, len(c.ModelContextOverrides))
+	for _, override := range c.ModelContextOverrides {
+		override.Model = strings.TrimSpace(override.Model)
+		if override.Model == "" {
+			continue
+		}
+		if override.ContextLength < 0 {
+			override.ContextLength = 0
+		}
+		if override.MaxCompletionTokens < 0 {
+			override.MaxCompletionTokens = 0
+		}
+		if override.ContextLength == 0 && override.MaxCompletionTokens == 0 {
+			continue
+		}
+		key := strings.ToLower(override.Model)
+		if idx, ok := seen[key]; ok {
+			out[idx] = override
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, override)
+	}
+
+	// Keep a non-nil empty slice so an emptied list still serializes to disk.
+	c.ModelContextOverrides = out
 }
 
 // PluginsConfig holds dynamic plugin system settings.
@@ -1131,6 +1188,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Normalize global OAuth model name aliases.
 	cfg.SanitizeOAuthModelAlias()
+
+	// Normalize manual model context window overrides.
+	cfg.SanitizeModelContextOverrides()
 
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
