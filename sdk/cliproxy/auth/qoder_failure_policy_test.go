@@ -9,6 +9,55 @@ import (
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
 
+func TestRecoverQoderQuotaProbeDisable(t *testing.T) {
+	now := time.Now()
+	auth := &Auth{
+		Provider: "qodercn",
+		Disabled: true,
+		Status:   StatusDisabled,
+		LastError: &Error{
+			HTTPStatus: http.StatusUnauthorized,
+			Message:    `{"code":"401","message":"token is not active"}`,
+		},
+		Metadata: map[string]any{
+			"disabled":        true,
+			"disabled_reason": `{"code":"401","message":"token is not active"}`,
+		},
+	}
+
+	if !recoverQoderQuotaProbeDisable(auth, now) {
+		t.Fatal("expected v7.2.109 quota-probe disable to be recovered")
+	}
+	if auth.Disabled || auth.Status != StatusActive || auth.LastError != nil {
+		t.Fatalf("recovered auth = disabled:%t status:%s error:%#v", auth.Disabled, auth.Status, auth.LastError)
+	}
+	if disabled, _ := auth.Metadata["disabled"].(bool); disabled {
+		t.Fatalf("metadata disabled = %#v, want false", auth.Metadata["disabled"])
+	}
+	if _, ok := auth.Metadata["disabled_reason"]; ok {
+		t.Fatalf("disabled_reason = %#v, want removed", auth.Metadata["disabled_reason"])
+	}
+}
+
+func TestRecoverQoderQuotaProbeDisableKeepsExecutionFailureDisabled(t *testing.T) {
+	auth := &Auth{
+		Provider: "qoder",
+		Disabled: true,
+		Status:   StatusDisabled,
+		Metadata: map[string]any{
+			"disabled":        true,
+			"disabled_reason": `Qoder API error 401: {"code":"401","message":"token is not active"}`,
+		},
+	}
+
+	if recoverQoderQuotaProbeDisable(auth, time.Now()) {
+		t.Fatal("execution-path inactive-token failure must remain disabled")
+	}
+	if !auth.Disabled || auth.Status != StatusDisabled {
+		t.Fatalf("auth disabled state = disabled:%t status:%s, want disabled", auth.Disabled, auth.Status)
+	}
+}
+
 func TestManagerMarkResult_DisablesQoderInactiveToken(t *testing.T) {
 	autoDisable := true
 	manager := NewManager(nil, nil, nil)

@@ -72,6 +72,10 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 		auth.ID = uuid.NewString()
 	}
 	now := time.Now()
+	// Restore credentials that v7.2.109 disabled only because the management
+	// quota probe received an inactive-token response. Real execution failures
+	// retain their wrapped Qoder API error and stay disabled.
+	recoverQoderQuotaProbeDisable(auth, now)
 	// Rebuild in-memory cooldown/counters from auth-file runtime block.
 	hydrateAuthRuntimeFromMetadata(auth, now)
 	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
@@ -104,6 +108,7 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	// merging with the current in-memory snapshot so a future cooldown cannot be
 	// dropped merely because the file was re-read.
 	hydrateAuthRuntimeFromMetadata(auth, now)
+	recoverQoderQuotaProbeDisable(auth, now)
 	m.mu.Lock()
 	existing, ok := m.auths[auth.ID]
 	if !ok || existing == nil {
@@ -226,6 +231,7 @@ func (m *Manager) Load(ctx context.Context) error {
 			continue
 		}
 		hydrateAuthRuntimeFromMetadata(auth, now)
+		recoverQoderQuotaProbeDisable(auth, now)
 		if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
 			_ = clearCooldownStateForAuth(auth, now)
 		}

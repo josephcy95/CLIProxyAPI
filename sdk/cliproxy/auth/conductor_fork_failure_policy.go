@@ -59,6 +59,32 @@ func authMatchesPrivateInstructionsPolicy(auth *Auth, privateRequest bool, requi
 	return true
 }
 
+func recoverQoderQuotaProbeDisable(auth *Auth, now time.Time) bool {
+	if auth == nil || !isQoderProvider(auth.Provider) || auth.Metadata == nil {
+		return false
+	}
+	reason, _ := auth.Metadata["disabled_reason"].(string)
+	reason = strings.TrimSpace(reason)
+	if reason == "" || !strings.Contains(strings.ToLower(reason), "token is not active") {
+		return false
+	}
+	// v7.2.109 incorrectly let management quota probes permanently disable an
+	// auth. Execution failures are wrapped as Qoder API errors, so recover only
+	// the unwrapped probe response and retain real request-path auto-disable.
+	lowerReason := strings.ToLower(reason)
+	if strings.Contains(lowerReason, "qoder") && strings.Contains(lowerReason, "api error 401") {
+		return false
+	}
+	auth.Disabled = false
+	auth.Status = StatusActive
+	auth.StatusMessage = ""
+	auth.LastError = nil
+	auth.UpdatedAt = now
+	auth.Metadata["disabled"] = false
+	delete(auth.Metadata, "disabled_reason")
+	return true
+}
+
 func (m *Manager) shouldAutoDisableQoderAuth(result Result) bool {
 	if m == nil || !isQoderProvider(result.Provider) || result.Error == nil {
 		return false
