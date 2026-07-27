@@ -111,6 +111,36 @@ func authAllowPrivateInstructionsValue(auth *coreauth.Auth) (bool, bool) {
 	return false, false
 }
 
+// syncAuthFileAllowPrivateInstructionsAttribute mirrors metadata onto the
+// runtime Attributes map so the scheduler private-instructions policy sees
+// the flag after a management PATCH. Dropped once by the upstream auth_files
+// split — keep it next to the other fork enrichment helpers.
+func syncAuthFileAllowPrivateInstructionsAttribute(auth *coreauth.Auth) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	allow, ok := authFileBoolValue(auth.Metadata["allow_private_instructions"])
+	if !ok || !allow {
+		delete(auth.Attributes, "allow_private_instructions")
+		if auth.Metadata != nil {
+			if !ok {
+				delete(auth.Metadata, "allow_private_instructions")
+			} else {
+				auth.Metadata["allow_private_instructions"] = false
+			}
+		}
+		return
+	}
+	auth.Attributes["allow_private_instructions"] = "true"
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["allow_private_instructions"] = true
+}
+
 func syncAuthFileCodexPlanTypeAttribute(auth *coreauth.Auth) {
 	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return

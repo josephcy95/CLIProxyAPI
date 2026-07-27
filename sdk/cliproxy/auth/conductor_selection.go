@@ -475,6 +475,8 @@ func (m *Manager) pickViaBuiltinScheduler(ctx context.Context, strategy schedule
 	}
 	providerKey := strings.ToLower(strings.TrimSpace(provider))
 	disallowFreeAuth := disallowFreeAuthFromMetadata(opts.Metadata)
+	privateInstructions := privateInstructionsModeFromMetadata(opts.Metadata)
+	requireAuthAllow, reserveMarkedAuths := codexInstructionsSelectionConfig(m)
 	for {
 		var selected *Auth
 		var errPick error
@@ -498,6 +500,13 @@ func (m *Manager) pickViaBuiltinScheduler(ctx context.Context, strategy schedule
 			return nil, true, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 		}
 		if disallowFreeAuth && isFreeCodexAuth(selected) {
+			if tried == nil {
+				tried = make(map[string]struct{})
+			}
+			tried[selected.ID] = struct{}{}
+			continue
+		}
+		if !authMatchesPrivateInstructionsPolicy(selected, privateInstructions, requireAuthAllow, reserveMarkedAuths) {
 			if tried == nil {
 				tried = make(map[string]struct{})
 			}
@@ -963,6 +972,8 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	disallowFreeAuth := disallowFreeAuthFromMetadata(opts.Metadata)
+	privateInstructions := privateInstructionsModeFromMetadata(opts.Metadata)
+	requireAuthAllow, reserveMarkedAuths := codexInstructionsSelectionConfig(m)
 
 	m.mu.RLock()
 	selector := m.selector
@@ -990,6 +1001,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 			continue
 		}
 		if disallowFreeAuth && isFreeCodexAuth(candidate) {
+			continue
+		}
+		if !authMatchesPrivateInstructionsPolicy(candidate, privateInstructions, requireAuthAllow, reserveMarkedAuths) {
 			continue
 		}
 		if _, used := tried[candidate.ID]; used {
@@ -1179,6 +1193,8 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
 	disallowFreeAuth := disallowFreeAuthFromMetadata(opts.Metadata)
+	privateInstructions := privateInstructionsModeFromMetadata(opts.Metadata)
+	requireAuthAllow, reserveMarkedAuths := codexInstructionsSelectionConfig(m)
 	for {
 		selected, errPick := m.scheduler.pickSingle(ctx, provider, model, opts, tried)
 		if errPick != nil && model != "" && shouldRetrySchedulerPick(errPick) {
@@ -1192,6 +1208,13 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 			return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 		}
 		if disallowFreeAuth && isFreeCodexAuth(selected) {
+			if tried == nil {
+				tried = make(map[string]struct{})
+			}
+			tried[selected.ID] = struct{}{}
+			continue
+		}
+		if !authMatchesPrivateInstructionsPolicy(selected, privateInstructions, requireAuthAllow, reserveMarkedAuths) {
 			if tried == nil {
 				tried = make(map[string]struct{})
 			}
@@ -1218,6 +1241,8 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	disallowFreeAuth := disallowFreeAuthFromMetadata(opts.Metadata)
+	privateInstructions := privateInstructionsModeFromMetadata(opts.Metadata)
+	requireAuthAllow, reserveMarkedAuths := codexInstructionsSelectionConfig(m)
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -1252,6 +1277,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 			continue
 		}
 		if disallowFreeAuth && isFreeCodexAuth(candidate) {
+			continue
+		}
+		if !authMatchesPrivateInstructionsPolicy(candidate, privateInstructions, requireAuthAllow, reserveMarkedAuths) {
 			continue
 		}
 		providerKey := executorKeyFromAuth(candidate)
@@ -1367,6 +1395,8 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 	}
 
 	disallowFreeAuth := disallowFreeAuthFromMetadata(opts.Metadata)
+	privateInstructions := privateInstructionsModeFromMetadata(opts.Metadata)
+	requireAuthAllow, reserveMarkedAuths := codexInstructionsSelectionConfig(m)
 	for {
 		selected, providerKey, errPick := m.scheduler.pickMixed(ctx, eligibleProviders, model, opts, tried)
 		if errPick != nil && model != "" && shouldRetrySchedulerPick(errPick) {
@@ -1380,6 +1410,13 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 			return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 		}
 		if disallowFreeAuth && isFreeCodexAuth(selected) {
+			if tried == nil {
+				tried = make(map[string]struct{})
+			}
+			tried[selected.ID] = struct{}{}
+			continue
+		}
+		if !authMatchesPrivateInstructionsPolicy(selected, privateInstructions, requireAuthAllow, reserveMarkedAuths) {
 			if tried == nil {
 				tried = make(map[string]struct{})
 			}

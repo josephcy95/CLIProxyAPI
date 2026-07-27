@@ -16,6 +16,25 @@ import (
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
 
+func privateInstructionsModeFromMetadata(meta map[string]any) bool {
+	return codexinstructions.RequestIsPrivate(meta)
+}
+
+func codexInstructionsSelectionConfig(m *Manager) (requireAllow bool, reserveMarked bool) {
+	requireAllow = true
+	if m == nil {
+		return requireAllow, false
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	if cfg == nil {
+		return requireAllow, false
+	}
+	if cfg.Codex.Instructions.RequireAuthAllow != nil {
+		requireAllow = *cfg.Codex.Instructions.RequireAuthAllow
+	}
+	return requireAllow, cfg.Codex.Instructions.ReserveMarkedAuths
+}
+
 // authMatchesPrivateInstructionsPolicy filters candidates for private/normal instruction mode.
 // Private requests optionally require allow_private_instructions.
 // When reserve-marked-auths is enabled, marked auths are excluded from normal traffic.

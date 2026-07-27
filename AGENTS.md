@@ -1,12 +1,13 @@
 # AGENTS.md
 
-Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with OAuth and round-robin load balancing.
+Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex/Qoder compatible APIs with OAuth and round-robin load balancing.
 
 ## Repository
 - **Origin (this fork, push/release):** https://github.com/josephcy95/CLIProxyAPI (`origin`)
 - **Upstream:** https://github.com/router-for-me/CLIProxyAPI (`upstream`)
 - Tags / releases are published on **josephcy95** only. Use `gh -R josephcy95/CLIProxyAPI` when default remote context is wrong.
 - Docker image: `ghcr.io/josephcy95/cli-proxy-api` (`:latest` + version on `v*` tag workflows).
+- Workspace sibling UI: `../cpa-management-center-forked` (Management Center). Parent workspace notes: `../AGENTS.md`.
 
 ## Fork policies
 
@@ -14,14 +15,46 @@ Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with 
 - Prefer full merge of upstream release tags / `upstream/main` so the fork is not left “N commits behind”.
 - On conflicts: keep fork features; take the more robust upstream fix; combine when both apply.
 - After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
+- **File splits are high-risk.** Upstream regularly splits large files (`service.go`, `conductor.go`, `config.go`, `server.go`, `auth_files.go`, provider executors) into `*_topic.go`. A clean compile does **not** mean fork logic survived — switch cases, route tables, and call sites can disappear silently.
+- After any upstream merge that touches those areas, diff pre-merge vs HEAD for:
+  - management routes (`mgmt.GET/PUT/...`)
+  - provider switch cases in `registerExecutorForAuth` / `registerModelsForAuth*`
+  - `baselineExecutorAuths` provider list
+  - scheduler selection filters (private-instructions, free-auth, etc.)
+  - `usagestore.Configure` call sites
+  - auth-file metadata sync hooks (`syncAuthFileMetadataFields`)
+
+### Dedicated fork files (prefer these so future splits cannot drop them)
+| File | Purpose |
+|---|---|
+| `internal/config/fork_failure_policy.go` | xAI/Codex failure policy + Codex private-instructions config types |
+| `sdk/cliproxy/auth/conductor_fork_failure_policy.go` | auto-disable, private-instructions policy helpers, exhaustion counters |
+| `sdk/api/handlers/handlers_private_instructions.go` | request private-instructions marker injection |
+| `internal/runtime/executor/codex_executor_fork_instructions.go` | apply configured Codex instructions |
+| `internal/api/handlers/management/auth_files_fork_enrichment.go` | Codex plan / private-instructions / xAI status enrichment |
+| `internal/api/handlers/management/auth_files_qoder_oauth.go` | Qoder + Qoder CN device-login management handlers |
 
 ### Fork features to preserve (do not silently drop)
-- xAI auto-disable after surviving 401 (and permission-denied 403 path) when config enabled
-- Codex auto-disable / exhaustion handling and related failure policy
-- Usage monitoring: store full client `api_key` (+ hash), filter/options/search
-- Distinct auth scheduler behavior where fork intentionally differs (e.g. `auth_unavailable` when candidates exist)
+- **Qoder CN (`qodercn`) and Qoder international (`qoder`)** device-login providers:
+  - executor registration (`NewQoderCNExecutor` / `NewQoderExecutor`) in `sdk/cliproxy/service_executors.go`
+  - model registration (`FetchQoderCNModels` / `FetchQoderIntlModels`) in `sdk/cliproxy/service_models.go`
+  - `baselineExecutorAuths` must list both providers
+  - auth load paths: `sdk/auth/filestore.go`, `internal/watcher/synthesizer/file.go`
+  - management routes `/qodercn-auth-url`, `/qoder-auth-url`
+  - CLI flags `--qodercn-login`, `--qoder-login`
+- **Codex private instructions**: policy must run in **all** auth selection paths (`pickViaBuiltinScheduler`, `pickNext`, `pickNextLegacy`, `pickNextMixed`, `pickNextMixedLegacy`). Helpers live in `conductor_fork_failure_policy.go`. PATCH auth-file must call `syncAuthFileAllowPrivateInstructionsAttribute`.
+- xAI auto-disable after surviving 401 (and permission-denied 403) when config enabled
+- Codex auto-disable / exhaustion handling (`trackCodexExhaustionCounter` / `disableCodexAuth`)
+- Usage monitoring: `usage-store-path` / `usage-retention-days`, `usagestore.Configure` on startup **and** reload, routes `/usage-events`, `/usage-summary`, `/usage-filter-options`, `/usage-account-stats`, `/usage-api-key-stats`, model-prices family
+- Distinct auth scheduler behavior (`auth_unavailable` when candidates exist)
+- Model context overrides (`model-context-overrides` management API + registry apply path)
 - Single data root (`CLIPROXY_DATA_DIR`, default `/data`): config/auths/logs/plugins/usage.db under one mount
 - Primary Chinese README / fork README choices; do not reintroduce removed promo assets without ask
+
+### Regression pins (keep these green)
+- `TestManagementRoutesAreRegistered` — management routes the UI depends on
+- `TestRegisterAvailableExecutors` — must include `qodercn` and `qoder`
+- Private-instructions policy unit tests under `sdk/cliproxy/auth/`
 
 ### Ship policy
 See workspace parent `../AGENTS.md` if present. In short:
@@ -54,7 +87,7 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - `internal/api/` — Gin HTTP API (routes, middleware, modules)
 - `internal/api/modules/amp/` — Amp integration (Amp-style routes + reverse proxy)
 - `internal/thinking/` — Main thinking/reasoning pipeline. `ApplyThinking()` (apply.go) parses suffixes (`suffix.go`, suffix overrides body), normalizes config to canonical `ThinkingConfig` (`types.go`), normalizes and validates centrally (`validate.go`/`convert.go`), then applies provider-specific output via `ProviderApplier`. Do not break this "canonical representation → per-provider translation" architecture.
-- `internal/runtime/executor/` — Per-provider runtime executors (incl. Codex WebSocket)
+- `internal/runtime/executor/` — Per-provider runtime executors (incl. Codex WebSocket, Qoder/Qoder CN)
 - `internal/translator/` — Provider protocol translators (and shared `common`)
 - `internal/registry/` — Model registry + remote updater (`StartModelsUpdater`); `--local-model` disables remote updates
 - `internal/store/` — Storage implementations and secret resolution
@@ -62,9 +95,9 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - `internal/cache/` — Request signature caching
 - `internal/watcher/` — Config hot-reload and watchers
 - `internal/wsrelay/` — WebSocket relay sessions
-- `internal/usage/` — Usage and token accounting
+- `internal/usage/` / `internal/usagestore/` — Usage and durable monitoring store
 - `internal/tui/` — Bubbletea terminal UI (`--tui`, `--standalone`)
-- `sdk/cliproxy/` — Embeddable SDK entry (service/builder/watchers/pipeline)
+- `sdk/cliproxy/` — Embeddable SDK entry (service/builder/watchers/pipeline). Provider wiring lives in split files: `service_executors.go`, `service_models.go`, `service_auth.go`, …
 - `test/` — Cross-module integration tests
 
 ## Code Conventions

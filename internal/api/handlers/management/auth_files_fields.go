@@ -435,6 +435,9 @@ func syncAuthFileMetadataFields(auth *coreauth.Auth, touchedRoots map[string]str
 	if _, ok := touchedRoots["websockets"]; ok {
 		syncAuthFileWebsocketsAttribute(auth)
 	}
+	if _, ok := touchedRoots["allow_private_instructions"]; ok {
+		syncAuthFileAllowPrivateInstructionsAttribute(auth)
+	}
 	if _, ok := touchedRoots["plan_type"]; ok {
 		syncAuthFileCodexPlanTypeAttribute(auth)
 	} else if _, ok := touchedRoots["chatgpt_plan_type"]; ok {
