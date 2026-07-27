@@ -174,13 +174,15 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 		return
 	}
 
-	// Try to find auth ID via authManager
+	// Try to find the auth ID and provider via authManager.
 	var authID string
+	var targetAuth *coreauth.Auth
 	if h.authManager != nil {
 		auths := h.authManager.List()
 		for _, auth := range auths {
 			if auth.FileName == name || auth.ID == name {
 				authID = auth.ID
+				targetAuth = auth
 				break
 			}
 		}
@@ -190,9 +192,18 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 		authID = name // fallback to filename as ID
 	}
 
-	// Get models from registry
+	// Get models from registry. Disabled credentials are intentionally removed
+	// from routing, but their Models dialog should still show Qoder's catalog.
 	reg := registry.GetGlobalRegistry()
 	models := reg.GetModelsForClient(authID)
+	if len(models) == 0 && targetAuth != nil {
+		switch strings.ToLower(strings.TrimSpace(targetAuth.Provider)) {
+		case "qodercn":
+			models = registry.GetQoderCNModels()
+		case "qoder":
+			models = registry.GetQoderIntlModels()
+		}
+	}
 
 	result := make([]gin.H, 0, len(models))
 	for _, m := range models {
