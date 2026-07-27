@@ -180,8 +180,11 @@ disable-claude-cloak-mode: false
 # - "passthrough": never inject or strip image_generation on non-images endpoints (forward the client payload unchanged); behaves like "chat" on /v1/images/* endpoints.
 disable-image-generation: false
 
-# xAI/Grok credential failure handling.
+# xAI provider behavior + credential failure handling.
 xai:
+  # When true, inject the native x_search tool when the request does not declare it.
+  # The injected tool is also added to tool_choice.allowed_tools when applicable.
+  inject-x-search: false
   # Disable an auth file permanently when xAI explicitly denies chat access/permission,
   # or when HTTP 401 remains after the one-shot OAuth refresh retry (bearer keys with no
   # refresh credential disable immediately). Error body is saved as disabled_reason.

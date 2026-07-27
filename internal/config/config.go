@@ -124,7 +124,7 @@ type Config struct {
 	// Codex configures provider-wide Codex request behavior.
 	Codex CodexConfig `yaml:"codex" json:"codex"`
 
-	// XAI configures xAI/Grok credential failure handling.
+	// XAI configures xAI/Grok request behavior (x_search injection) and credential failure handling.
 	XAI XAIConfig `yaml:"xai" json:"xai"`
 
 	// CodexHeaderDefaults configures fallback headers for Codex OAuth model requests.

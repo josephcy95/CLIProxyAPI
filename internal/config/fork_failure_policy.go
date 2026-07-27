@@ -94,8 +94,12 @@ func (value CodexConfig) UsageLimitCooldownFallbackHoursValue() int {
 	return *normalized.UsageLimitCooldownFallbackHours
 }
 
-// XAIConfig configures xAI/Grok credential failure handling.
+// XAIConfig configures xAI/Grok request behavior and credential failure handling.
+// Upstream inject-x-search lives here with the fork failure-policy fields so the
+// single `xai:` YAML block cannot be split into two competing types.
 type XAIConfig struct {
+	// InjectXSearch injects xAI's native x_search tool when the request does not declare it.
+	InjectXSearch bool `yaml:"inject-x-search" json:"inject-x-search"`
 	// AutoDisablePermissionDenied permanently disables an auth file when xAI returns
 	// a known permission-denied/access-denied response, or HTTP 401 after the one-shot
 	// OAuth refresh retry (or when no refresh credential exists).
