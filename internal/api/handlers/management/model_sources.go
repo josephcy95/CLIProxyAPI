@@ -4,6 +4,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
@@ -20,6 +23,7 @@ type modelSourceCandidate struct {
 	AuthIndex   string `json:"auth_index,omitempty"`
 	AuthID      string `json:"auth_id,omitempty"`
 	Status      string `json:"status,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 	Disabled    bool   `json:"disabled,omitempty"`
 	Unavailable bool   `json:"unavailable,omitempty"`
 	BaseURL     string `json:"base_url,omitempty"`
@@ -46,7 +50,6 @@ func (h *Handler) GetModelSources(c *gin.Context) {
 		if len(models) == 0 {
 			continue
 		}
-		candidate := buildModelSourceCandidate(auth)
 		for _, model := range models {
 			if model == nil {
 				continue
@@ -55,7 +58,7 @@ func (h *Handler) GetModelSources(c *gin.Context) {
 			if id == "" {
 				continue
 			}
-			out[id] = append(out[id], candidate)
+			out[id] = append(out[id], buildModelSourceCandidateForModel(auth, id))
 		}
 	}
 
@@ -87,14 +90,20 @@ func (h *Handler) GetModelSources(c *gin.Context) {
 }
 
 func buildModelSourceCandidate(auth *coreauth.Auth) modelSourceCandidate {
+	return buildModelSourceCandidateForModel(auth, "")
+}
+
+func buildModelSourceCandidateForModel(auth *coreauth.Auth, model string) modelSourceCandidate {
 	candidate := modelSourceCandidate{
 		Provider:    strings.TrimSpace(auth.Provider),
 		Label:       strings.TrimSpace(auth.Label),
 		Disabled:    auth.Disabled,
 		Unavailable: auth.Unavailable,
 		Status:      string(auth.Status),
+		Reason:      strings.TrimSpace(auth.StatusMessage),
 		AuthID:      strings.TrimSpace(auth.ID),
 	}
+	applyModelSourceState(&candidate, auth, model, time.Now())
 	if candidate.Label == "" {
 		if name := strings.TrimSpace(authAttribute(auth, "compat_name")); name != "" {
 			candidate.Label = name
@@ -121,4 +130,32 @@ func buildModelSourceCandidate(auth *coreauth.Auth) modelSourceCandidate {
 		candidate.BaseURL = base
 	}
 	return candidate
+}
+
+func applyModelSourceState(candidate *modelSourceCandidate, auth *coreauth.Auth, model string, now time.Time) {
+	if candidate == nil || auth == nil || strings.TrimSpace(model) == "" || len(auth.ModelStates) == 0 {
+		return
+	}
+	modelKey := strings.TrimSpace(thinking.ParseSuffix(model).ModelName)
+	state := auth.ModelStates[model]
+	if state == nil && modelKey != "" && modelKey != model {
+		state = auth.ModelStates[modelKey]
+	}
+	if state == nil {
+		return
+	}
+	if state.Status == coreauth.StatusDisabled {
+		candidate.Disabled = true
+		candidate.Status = string(state.Status)
+	}
+	if reason := strings.TrimSpace(state.StatusMessage); reason != "" {
+		candidate.Reason = reason
+	} else if reason := strings.TrimSpace(state.Quota.Reason); reason != "" {
+		candidate.Reason = reason
+	} else if state.LastError != nil && strings.TrimSpace(state.LastError.Message) != "" {
+		candidate.Reason = strings.TrimSpace(state.LastError.Message)
+	}
+	if state.Unavailable && state.NextRetryAfter.After(now) {
+		candidate.Unavailable = true
+	}
 }

@@ -5,11 +5,34 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
+
+func TestBuildModelSourceCandidateForModelUsesActiveModelCooldown(t *testing.T) {
+	now := time.Now()
+	auth := &coreauth.Auth{
+		ID:       "model-state-auth",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-test": {
+				Status:         coreauth.StatusActive,
+				StatusMessage:  "quota exhausted",
+				Unavailable:    true,
+				NextRetryAfter: now.Add(time.Hour),
+			},
+		},
+	}
+
+	candidate := buildModelSourceCandidateForModel(auth, "gpt-test")
+	if !candidate.Unavailable || candidate.Reason != "quota exhausted" {
+		t.Fatalf("candidate = %#v, want unavailable model-state reason", candidate)
+	}
+}
 
 func TestGetModelSources_OrdersByPriorityAndKeyPriority(t *testing.T) {
 	gin.SetMode(gin.TestMode)

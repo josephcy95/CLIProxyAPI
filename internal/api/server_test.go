@@ -1901,6 +1901,7 @@ var managementRouteContract = []struct {
 	{http.MethodPut, "/v0/management/codex-failure-config"},
 	// Model metadata (Dashboard tooltip + Model Context page).
 	{http.MethodGet, "/v0/management/model-sources"},
+	{http.MethodPost, "/v0/management/playground/chat"},
 	{http.MethodGet, "/v0/management/model-context-status"},
 	{http.MethodGet, "/v0/management/model-context-overrides"},
 	{http.MethodPut, "/v0/management/model-context-overrides"},
