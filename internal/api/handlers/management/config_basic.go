@@ -286,6 +286,35 @@ func (h *Handler) PutCodexInstructions(c *gin.Context) {
 	h.persist(c)
 }
 
+func (h *Handler) GetQoderConfig(c *gin.Context) {
+	normalized := config.NormalizeQoderConfig(h.cfg.Qoder)
+	c.JSON(http.StatusOK, gin.H{
+		"auto-disable-inactive-token": normalized.AutoDisableInactiveToken,
+		"queued-403-cooldown-minutes": normalized.QueuedForbiddenCooldownMinutes,
+	})
+}
+
+func (h *Handler) PutQoderConfig(c *gin.Context) {
+	// Flat JSON keys from the management UI (Qoder failure policy).
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body", "message": err.Error()})
+		return
+	}
+	rawBytes, errMarshal := json.Marshal(raw)
+	if errMarshal != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body", "message": errMarshal.Error()})
+		return
+	}
+	var qoderBody config.QoderConfig
+	if err := json.Unmarshal(rawBytes, &qoderBody); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body", "message": err.Error()})
+		return
+	}
+	h.cfg.Qoder = config.NormalizeQoderConfig(qoderBody)
+	h.persist(c)
+}
+
 func (h *Handler) GetXAIConfig(c *gin.Context) {
 	normalized := config.NormalizeXAIConfig(h.cfg.XAI)
 	c.JSON(http.StatusOK, gin.H{

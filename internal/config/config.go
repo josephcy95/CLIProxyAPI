@@ -127,6 +127,9 @@ type Config struct {
 	// XAI configures xAI/Grok request behavior (x_search injection) and credential failure handling.
 	XAI XAIConfig `yaml:"xai" json:"xai"`
 
+	// Qoder configures shared Qoder CN and international credential failure handling.
+	Qoder QoderConfig `yaml:"qoder" json:"qoder"`
+
 	// CodexHeaderDefaults configures fallback headers for Codex OAuth model requests.
 	// These are used only when the client does not send its own headers.
 	CodexHeaderDefaults CodexHeaderDefaults `yaml:"codex-header-defaults" json:"codex-header-defaults"`

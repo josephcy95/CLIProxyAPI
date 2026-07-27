@@ -59,6 +59,10 @@ xai:
   free-usage-exhausted-disable-after: 3
   other-403-disable-after: 3
 
+qoder:
+  auto-disable-inactive-token: true
+  queued-403-cooldown-minutes: 5
+
 gpt-image-2-base-model: "gpt-5.4-mini"
 video-result-auth-cache-ttl: "3h"
 auth-auto-refresh-workers: 0

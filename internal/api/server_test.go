@@ -1891,6 +1891,8 @@ var managementRouteContract = []struct {
 	{http.MethodDelete, "/v0/management/model-price-aliases"},
 	{http.MethodPost, "/v0/management/model-prices/sync"},
 	// Provider-specific config pages.
+	{http.MethodGet, "/v0/management/qoder-config"},
+	{http.MethodPut, "/v0/management/qoder-config"},
 	{http.MethodGet, "/v0/management/xai-config"},
 	{http.MethodPut, "/v0/management/xai-config"},
 	{http.MethodGet, "/v0/management/codex-instructions"},

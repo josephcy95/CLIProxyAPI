@@ -59,6 +59,60 @@ func authMatchesPrivateInstructionsPolicy(auth *Auth, privateRequest bool, requi
 	return true
 }
 
+func (m *Manager) shouldAutoDisableQoderAuth(result Result) bool {
+	if m == nil || !isQoderProvider(result.Provider) || result.Error == nil {
+		return false
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	if cfg == nil || !cfg.Qoder.AutoDisableInactiveTokenEnabled() {
+		return false
+	}
+	return result.Error.HTTPStatus == http.StatusUnauthorized && isQoderInactiveTokenError(result.Error)
+}
+
+func (m *Manager) disableQoderAuthForInactiveToken(auth *Auth, resultErr *Error, now time.Time) {
+	if auth == nil {
+		return
+	}
+	reason := "Qoder token is not active"
+	if resultErr != nil && strings.TrimSpace(resultErr.Message) != "" {
+		reason = resultErr.Message
+	}
+	auth.Disabled = true
+	auth.Status = StatusDisabled
+	auth.StatusMessage = reason
+	auth.UpdatedAt = now
+	auth.LastError = cloneError(resultErr)
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["disabled"] = true
+	auth.Metadata["disabled_reason"] = reason
+}
+
+func isQoderProvider(provider string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	return provider == "qoder" || provider == "qodercn"
+}
+
+func isQoderInactiveTokenError(resultErr *Error) bool {
+	if resultErr == nil || resultErr.HTTPStatus != http.StatusUnauthorized {
+		return false
+	}
+	return strings.Contains(strings.ToLower(resultErr.Message+" "+resultErr.Code), "token is not active")
+}
+
+func isQoderQueuedForbiddenError(resultErr *Error) bool {
+	if resultErr == nil || resultErr.HTTPStatus != http.StatusForbidden {
+		return false
+	}
+	// Qoder nests its queue details in JSON strings, which leaves backslash
+	// escaping in the propagated error. Strip it before checking the stable
+	// upstream code and queue marker.
+	body := strings.ToLower(strings.ReplaceAll(resultErr.Message+" "+resultErr.Code, "\\", ""))
+	return strings.Contains(body, "10605") && strings.Contains(body, `"isqueued":true`)
+}
+
 func (m *Manager) shouldAutoDisableXAIAuth(result Result) bool {
 	if m == nil || !strings.EqualFold(strings.TrimSpace(result.Provider), "xai") || result.Error == nil {
 		return false
@@ -144,6 +198,15 @@ func (m *Manager) effectiveRetryAfterForResult(result Result) *time.Duration {
 	provider := strings.ToLower(strings.TrimSpace(result.Provider))
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
 	switch provider {
+	case "qoder", "qodercn":
+		if isQoderQueuedForbiddenError(result.Error) {
+			policy := internalconfig.DefaultQoderConfig()
+			if cfg != nil {
+				policy = internalconfig.NormalizeQoderConfig(cfg.Qoder)
+			}
+			d := time.Duration(policy.QueuedForbiddenCooldownMinutesValue()) * time.Minute
+			return &d
+		}
 	case "xai":
 		policy := internalconfig.DefaultXAIConfig()
 		if cfg != nil {

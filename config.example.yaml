@@ -199,6 +199,15 @@ xai:
   # Same repeated-exhaustion disable threshold for other (non permission-denied) xAI 403 responses.
   other-403-disable-after: 3
 
+# Qoder CN + international credential failure handling.
+qoder:
+  # Disable an auth file only when Qoder explicitly reports an inactive token (HTTP 401).
+  # The full upstream response is saved as disabled_reason.
+  auto-disable-inactive-token: true
+  # Model cooldown for Qoder HTTP 403 code 10605 responses with isQueued=true.
+  # This upstream capacity queue is transient and never disables the auth file. Set 0 to retry immediately.
+  queued-403-cooldown-minutes: 5
+
 # Base model used by the legacy hosted image_generation tool path when a Codex image request is not proxied directly through the Image API.
 # Must start with "gpt-" (case-insensitive). If unset or invalid, defaults to "gpt-5.4-mini".
 # gpt-image-2-base-model: "gpt-5.4-mini"

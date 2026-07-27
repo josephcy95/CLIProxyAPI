@@ -724,6 +724,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		} else if m.shouldAutoDisableXAIAuth(result) {
 			m.disableXAIAuthForPermissionFailure(auth, result.Error, now)
+		} else if m.shouldAutoDisableQoderAuth(result) {
+			m.disableQoderAuthForInactiveToken(auth, result.Error, now)
 		} else {
 			// Count exhaustion hits before applying cooldown so the first event also
 			// increments; subsequent hits only count after cooldown ends.

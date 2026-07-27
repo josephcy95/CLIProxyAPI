@@ -1,6 +1,6 @@
 package config
 
-// Fork-only configuration: Codex private instructions and the xAI/Codex
+// Fork-only configuration: Codex private instructions and the xAI/Codex/Qoder
 // credential failure policies. Kept in a dedicated file so upstream splits of
 // config.go do not silently drop them again.
 
@@ -92,6 +92,51 @@ func (value CodexConfig) UsageLimitDisableAfterValue() int {
 func (value CodexConfig) UsageLimitCooldownFallbackHoursValue() int {
 	normalized := NormalizeCodexConfig(value)
 	return *normalized.UsageLimitCooldownFallbackHours
+}
+
+// QoderConfig configures shared Qoder CN and international credential failure handling.
+// It applies to both qodercn and qoder OAuth auth files.
+type QoderConfig struct {
+	// AutoDisableInactiveToken disables an auth file when Qoder confirms its token is inactive.
+	AutoDisableInactiveToken *bool `yaml:"auto-disable-inactive-token,omitempty" json:"auto-disable-inactive-token,omitempty"`
+	// QueuedForbiddenCooldownMinutes is the model cooldown for Qoder 403 code 10605
+	// responses that explicitly report isQueued=true. Set 0 to immediately retry.
+	QueuedForbiddenCooldownMinutes *int `yaml:"queued-403-cooldown-minutes,omitempty" json:"queued-403-cooldown-minutes,omitempty"`
+}
+
+// DefaultQoderConfig returns the Qoder failure policy used when the qoder block is absent.
+func DefaultQoderConfig() QoderConfig {
+	autoDisable := true
+	queuedForbiddenCooldown := 5
+	return QoderConfig{
+		AutoDisableInactiveToken:       &autoDisable,
+		QueuedForbiddenCooldownMinutes: &queuedForbiddenCooldown,
+	}
+}
+
+// NormalizeQoderConfig fills omitted Qoder policy values and clamps negative cooldowns.
+func NormalizeQoderConfig(value QoderConfig) QoderConfig {
+	defaults := DefaultQoderConfig()
+	if value.AutoDisableInactiveToken == nil {
+		value.AutoDisableInactiveToken = defaults.AutoDisableInactiveToken
+	}
+	if value.QueuedForbiddenCooldownMinutes == nil {
+		value.QueuedForbiddenCooldownMinutes = defaults.QueuedForbiddenCooldownMinutes
+	} else if *value.QueuedForbiddenCooldownMinutes < 0 {
+		zero := 0
+		value.QueuedForbiddenCooldownMinutes = &zero
+	}
+	return value
+}
+
+func (value QoderConfig) AutoDisableInactiveTokenEnabled() bool {
+	normalized := NormalizeQoderConfig(value)
+	return normalized.AutoDisableInactiveToken != nil && *normalized.AutoDisableInactiveToken
+}
+
+func (value QoderConfig) QueuedForbiddenCooldownMinutesValue() int {
+	normalized := NormalizeQoderConfig(value)
+	return *normalized.QueuedForbiddenCooldownMinutes
 }
 
 // XAIConfig configures xAI/Grok request behavior and credential failure handling.

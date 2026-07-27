@@ -194,12 +194,32 @@ func (h *Handler) APICall(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to read response"})
 		return
 	}
+	if auth != nil && isQoderInactiveTokenQuotaResponse(auth, resp.StatusCode, respBody) && h.authManager != nil {
+		h.authManager.MarkResult(c.Request.Context(), coreauth.Result{
+			AuthID:   auth.ID,
+			Provider: auth.Provider,
+			Success:  false,
+			Error: &coreauth.Error{
+				HTTPStatus: http.StatusUnauthorized,
+				Message:    string(respBody),
+			},
+		})
+	}
 
 	c.JSON(http.StatusOK, apiCallResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
 		Body:       string(respBody),
 	})
+}
+
+func isQoderInactiveTokenQuotaResponse(auth *coreauth.Auth, statusCode int, body []byte) bool {
+	if auth == nil || statusCode != http.StatusUnauthorized {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+	return (provider == "qoder" || provider == "qodercn") &&
+		strings.Contains(strings.ToLower(string(body)), "token is not active")
 }
 
 func firstNonEmptyString(values ...*string) string {
