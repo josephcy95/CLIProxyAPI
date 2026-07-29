@@ -9,6 +9,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	"golang.org/x/net/context"
@@ -177,8 +178,16 @@ func (h *BaseAPIHandler) getRequestDetailsWithOptions(modelName string, allowIma
 
 	parsed := thinking.ParseSuffix(resolvedModelName)
 	baseModel := strings.TrimSpace(parsed.ModelName)
+	// Private instruction markers (private/…, …-private, custom -jb, etc.) are virtual
+	// catalog ids only. Strip them for registry provider lookup; keep resolvedModelName
+	// intact so applyPrivateCodexInstructionModel can still detect private mode later.
+	var authManager *coreauth.Manager
+	if h != nil {
+		authManager = h.AuthManager
+	}
+	lookupModel := stripPrivateCodexMarkersForProviderLookup(authManager, baseModel)
 
-	if errMsg := h.validateImageOnlyModel(baseModel, allowImageModel); errMsg != nil {
+	if errMsg := h.validateImageOnlyModel(lookupModel, allowImageModel); errMsg != nil {
 		return nil, "", errMsg
 	}
 
@@ -186,14 +195,21 @@ func (h *BaseAPIHandler) getRequestDetailsWithOptions(modelName string, allowIma
 		return []string{"home"}, resolvedModelName, nil
 	}
 
-	providers = util.GetProviderName(baseModel)
-	// Fallback: if baseModel has no provider but differs from resolvedModelName,
+	providers = util.GetProviderName(lookupModel)
+	// Fallback: if lookupModel has no provider but differs from resolvedModelName,
 	// try using the full model name. This handles edge cases where custom models
 	// may be registered with their full suffixed name (e.g., "my-model(8192)").
 	// Evaluated in Story 11.8: This fallback is intentionally preserved to support
 	// custom model registrations that include thinking suffixes.
-	if len(providers) == 0 && baseModel != resolvedModelName {
-		providers = util.GetProviderName(resolvedModelName)
+	if len(providers) == 0 && lookupModel != resolvedModelName {
+		fallbackLookup := stripPrivateCodexMarkersForProviderLookup(authManager, thinking.ParseSuffix(resolvedModelName).ModelName)
+		if fallbackLookup == "" {
+			fallbackLookup = resolvedModelName
+		}
+		providers = util.GetProviderName(fallbackLookup)
+		if len(providers) == 0 {
+			providers = util.GetProviderName(resolvedModelName)
+		}
 	}
 
 	if len(providers) == 0 {

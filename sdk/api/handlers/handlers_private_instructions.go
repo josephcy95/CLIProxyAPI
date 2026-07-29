@@ -39,6 +39,27 @@ func applyPrivateCodexInstructionModel(manager *coreauth.Manager, modelName stri
 	return stripped, meta
 }
 
+// stripPrivateCodexMarkersForProviderLookup removes configured private prefix/suffix markers so
+// registry provider resolution can find the real model (e.g. kiro/gpt-5.6-luna-jb → kiro/gpt-5.6-luna).
+// Thinking suffixes such as "(high)" should already be stripped by the caller.
+// The original model id must still be passed to applyPrivateCodexInstructionModel later so private
+// mode metadata is set.
+func stripPrivateCodexMarkersForProviderLookup(manager *coreauth.Manager, modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || manager == nil {
+		return modelName
+	}
+	// Without prefix/suffix mode every eligible request is private; model ids are not marked.
+	if manager.CodexInstructionsApplyWithoutPrefixSuffix(modelName) {
+		return modelName
+	}
+	stripped, private := codexinstructions.ParseModel(modelName, codexInstructionMarkersFromManager(manager))
+	if private && strings.TrimSpace(stripped) != "" {
+		return stripped
+	}
+	return modelName
+}
+
 func codexInstructionMarkersFromManager(manager *coreauth.Manager) codexinstructions.MarkerConfig {
 	if manager == nil {
 		return codexinstructions.DefaultMarkers()
