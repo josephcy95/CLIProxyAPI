@@ -11,10 +11,21 @@ Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex/Qoder compatible APIs
 
 ## Fork policies
 
-### Upstream sync
+### Upstream sync (preserve this fork)
+This fork exists for **custom behavior**. Upstream is for bug fixes and additive features — not to erase fork-only logic.
+
 - Prefer full merge of upstream release tags / `upstream/main` so the fork is not left “N commits behind”.
-- On conflicts: keep fork features; take the more robust upstream fix; combine when both apply.
 - After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
+
+**Upstream may replace fork code only when** it fixes the same broken path, implements the same feature more robustly without dropping fork semantics, or is security/deploy-blocking in that area.
+
+**Stop and ask the user first** before accepting upstream that:
+- refactors or rewrites fork-owned behavior without a clear bug fix
+- would drop or break any item under “Fork features to preserve”
+- is large/ambiguous and you cannot prove fork features still work
+
+On conflicts: **keep fork features** by default; take upstream only for the narrow cases above; combine when both matter. Never resolve by deleting fork-only files or silently dropping selection filters / routes.
+
 - **File splits are high-risk.** Upstream regularly splits large files (`service.go`, `conductor.go`, `config.go`, `server.go`, `auth_files.go`, provider executors) into `*_topic.go`. A clean compile does **not** mean fork logic survived — switch cases, route tables, and call sites can disappear silently.
 - After any upstream merge that touches those areas, diff pre-merge vs HEAD for:
   - management routes (`mgmt.GET/PUT/...`)
