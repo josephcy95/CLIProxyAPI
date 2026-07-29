@@ -41,18 +41,38 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		return nil, nil, errChan
 	}
 	req, opts := h.pluginExecutorRequest(ctx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, true, execOptions)
-	req, opts = h.applyRequestInterceptorsBeforeAuth(ctx, entryProtocol, originalRequestedModel, req, opts, execOptions.SkipInterceptorPluginID)
-	req, opts = h.applyRequestInterceptorsAfterPluginExecutorRoute(ctx, host, executorPluginID, entryProtocol, originalRequestedModel, req, opts, execOptions.SkipInterceptorPluginID)
+	lifecycle := h.newRequestLifecycleTracker(ctx, entryProtocol, modelName, originalRequestedModel, true, opts.Metadata, execOptions.SkipInterceptorPluginID)
+	var interceptErr *interfaces.ErrorMessage
+	req, opts, interceptErr = h.applyRequestInterceptorsBeforeAuth(ctx, entryProtocol, originalRequestedModel, lifecycle.requestID(), req, opts, execOptions.SkipInterceptorPluginID)
+	if interceptErr != nil {
+		lifecycle.completeError(ctx, interceptErr)
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- interceptErr
+		close(errChan)
+		return nil, nil, errChan
+	}
+	req, opts, interceptErr = h.applyRequestInterceptorsAfterPluginExecutorRoute(ctx, host, executorPluginID, entryProtocol, originalRequestedModel, lifecycle.requestID(), req, opts, execOptions.SkipInterceptorPluginID)
+	if interceptErr != nil {
+		lifecycle.completeError(ctx, interceptErr)
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- interceptErr
+		close(errChan)
+		return nil, nil, errChan
+	}
 	streamResult, errStream := host.ExecutePluginExecutorStream(ctx, executorPluginID, req, opts)
 	if errStream != nil {
+		errMsg := executionErrorMessage(errStream)
+		lifecycle.completeError(ctx, errMsg)
 		errChan := make(chan *interfaces.ErrorMessage, 1)
-		errChan <- executionErrorMessage(errStream)
+		errChan <- errMsg
 		close(errChan)
 		return nil, nil, errChan
 	}
 	if streamResult == nil {
+		errMsg := &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("plugin executor returned nil stream")}
+		lifecycle.completeError(ctx, errMsg)
 		errChan := make(chan *interfaces.ErrorMessage, 1)
-		errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("plugin executor returned nil stream")}
+		errChan <- errMsg
 		close(errChan)
 		return nil, nil, errChan
 	}
@@ -67,6 +87,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 	}
 	if streamInterceptorsActive {
 		intercepted := interceptStreamChunk(ctx, interceptorHost, pluginapi.StreamChunkInterceptRequest{
+			RequestID:       lifecycle.requestID(),
 			SourceFormat:    responseProtocol,
 			Model:           modelName,
 			RequestedModel:  originalRequestedModel,
@@ -97,6 +118,12 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		chunks = closed
 	}
 	go func() {
+		completionOutcome := pluginapi.RequestCompletionSucceeded
+		completionStatus := http.StatusOK
+		var completionErr error
+		defer func() {
+			lifecycle.complete(completionOutcome, completionStatus, completionErr)
+		}()
 		defer close(dataChan)
 		defer close(errChan)
 		chunkIndex := 0
@@ -104,15 +131,29 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		for {
 			chunk, ok, canceled := nextStreamChunk(ctx, nil, nil, chunks)
 			if canceled {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				if ctx != nil {
+					completionErr = ctx.Err()
+				}
 				return
 			}
 			if !ok {
 				return
 			}
 			if chunk.Err != nil {
+				errMsg := executionErrorMessage(chunk.Err)
+				completionOutcome = pluginapi.RequestCompletionFailed
+				completionStatus = errMsg.StatusCode
+				completionErr = chunk.Err
 				select {
-				case errChan <- executionErrorMessage(chunk.Err):
+				case errChan <- errMsg:
 				case <-done:
+					completionOutcome = pluginapi.RequestCompletionCanceled
+					completionStatus = 0
+					if ctx != nil {
+						completionErr = ctx.Err()
+					}
 				}
 				return
 			}
@@ -122,6 +163,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 			payload := cloneBytes(chunk.Payload)
 			if streamInterceptorsActive {
 				intercepted := interceptStreamChunk(ctx, interceptorHost, pluginapi.StreamChunkInterceptRequest{
+					RequestID:       lifecycle.requestID(),
 					SourceFormat:    responseProtocol,
 					Model:           modelName,
 					RequestedModel:  originalRequestedModel,
@@ -147,9 +189,17 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 			}
 			if responseProtocol == "openai-response" {
 				if errValidate := validateSSEDataJSON(payload); errValidate != nil {
+					completionOutcome = pluginapi.RequestCompletionFailed
+					completionStatus = http.StatusBadGateway
+					completionErr = errValidate
 					select {
 					case errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: errValidate}:
 					case <-done:
+						completionOutcome = pluginapi.RequestCompletionCanceled
+						completionStatus = 0
+						if ctx != nil {
+							completionErr = ctx.Err()
+						}
 					}
 					return
 				}
@@ -160,6 +210,11 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 					historyChunks = appendStreamInterceptorHistory(historyChunks, payload)
 				}
 			case <-done:
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				if ctx != nil {
+					completionErr = ctx.Err()
+				}
 				return
 			}
 		}
@@ -216,6 +271,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		Payload: payload,
 	}
 	afterAuthCapture := &requestAfterAuthCapture{}
+	lifecycle := h.newRequestLifecycleTracker(ctx, entryProtocol, normalizedModel, originalRequestedModel, true, reqMeta, execOptions.SkipInterceptorPluginID)
 	opts := coreexecutor.Options{
 		Stream:                      true,
 		Alt:                         alt,
@@ -224,33 +280,33 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		ResponseFormat:              sdktranslator.FromString(responseProtocol),
 		Headers:                     modelExecutionHeaders(ctx, execOptions.Headers),
 		Query:                       modelExecutionQuery(ctx, execOptions.Query),
-		RequestAfterAuthInterceptor: h.requestAfterAuthInterceptor(afterAuthCapture, execOptions.SkipInterceptorPluginID),
+		RequestAfterAuthInterceptor: h.requestAfterAuthInterceptor(afterAuthCapture, lifecycle.requestID(), execOptions.SkipInterceptorPluginID),
 	}
 	opts.Metadata = reqMeta
-	req, opts = h.applyRequestInterceptorsBeforeAuth(ctx, entryProtocol, originalRequestedModel, req, opts, execOptions.SkipInterceptorPluginID)
+	var interceptErr *interfaces.ErrorMessage
+	req, opts, interceptErr = h.applyRequestInterceptorsBeforeAuth(ctx, entryProtocol, originalRequestedModel, lifecycle.requestID(), req, opts, execOptions.SkipInterceptorPluginID)
+	if interceptErr != nil {
+		lifecycle.completeError(ctx, interceptErr)
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- interceptErr
+		close(errChan)
+		return nil, nil, errChan
+	}
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
+		errMsg := executionErrorMessage(err)
+		lifecycle.completeError(ctx, errMsg)
 		errChan := make(chan *interfaces.ErrorMessage, 1)
-		status := http.StatusInternalServerError
-		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-			if code := se.StatusCode(); code > 0 {
-				status = code
-			}
-		}
-		var addon http.Header
-		if he, ok := err.(interface{ Headers() http.Header }); ok && he != nil {
-			if hdr := he.Headers(); hdr != nil {
-				addon = hdr.Clone()
-			}
-		}
-		errChan <- &interfaces.ErrorMessage{StatusCode: status, Error: err, Addon: addon}
+		errChan <- errMsg
 		close(errChan)
 		return nil, nil, errChan
 	}
 	if streamResult == nil {
+		errMsg := &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("auth manager returned nil stream")}
+		lifecycle.completeError(ctx, errMsg)
 		errChan := make(chan *interfaces.ErrorMessage, 1)
-		errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: fmt.Errorf("auth manager returned nil stream")}
+		errChan <- errMsg
 		close(errChan)
 		return nil, nil, errChan
 	}
@@ -284,6 +340,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		}
 		executedReq, executedOpts := executedRequest()
 		intercepted := interceptStreamChunk(ctx, interceptorHost, pluginapi.StreamChunkInterceptRequest{
+			RequestID:       lifecycle.requestID(),
 			SourceFormat:    responseProtocol,
 			Model:           normalizedModel,
 			RequestedModel:  originalRequestedModel,
@@ -304,6 +361,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		if streamInterceptorsActive {
 			executedReq, executedOpts := executedRequest()
 			intercepted := interceptStreamChunk(ctx, interceptorHost, pluginapi.StreamChunkInterceptRequest{
+				RequestID:       lifecycle.requestID(),
 				SourceFormat:    responseProtocol,
 				Model:           normalizedModel,
 				RequestedModel:  originalRequestedModel,
@@ -409,7 +467,12 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		bootstrapRetries++
 		retryResult, retryErr := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 		if retryErr != nil {
-			bootstrapErr = executionErrorMessage(enrichAuthSelectionError(retryErr, providers, normalizedModel))
+			originalBootstrapErr := executionErrorMessage(bootstrapStreamErr)
+			if isAuthSelectionUnavailable(retryErr) && originalBootstrapErr.StatusCode >= http.StatusInternalServerError {
+				bootstrapErr = originalBootstrapErr
+			} else {
+				bootstrapErr = executionErrorMessage(enrichAuthSelectionError(retryErr, providers, normalizedModel))
+			}
 			break
 		}
 		if retryResult == nil {
@@ -440,9 +503,20 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	errChan := make(chan *interfaces.ErrorMessage, 1)
 
 	go func() {
+		completionOutcome := pluginapi.RequestCompletionSucceeded
+		completionStatus := http.StatusOK
+		var completionErr error
+		defer func() {
+			lifecycle.complete(completionOutcome, completionStatus, completionErr)
+		}()
 		defer close(dataChan)
 		defer close(errChan)
 		if streamCanceledBeforeRead {
+			completionOutcome = pluginapi.RequestCompletionCanceled
+			completionStatus = 0
+			if ctx != nil {
+				completionErr = ctx.Err()
+			}
 			return
 		}
 
@@ -473,7 +547,17 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		}
 
 		if bootstrapErr != nil {
-			_ = sendErr(bootstrapErr)
+			completionOutcome = pluginapi.RequestCompletionFailed
+			if bootstrapErr.DirectResponse {
+				completionOutcome = pluginapi.RequestCompletionRejected
+			}
+			completionStatus = bootstrapErr.StatusCode
+			completionErr = bootstrapErr.Error
+			if !sendErr(bootstrapErr) && ctx != nil && ctx.Err() != nil {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				completionErr = ctx.Err()
+			}
 			return
 		}
 
@@ -481,6 +565,11 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		historyChunks := bootstrapHistoryChunks
 		if bootstrapPayload != nil {
 			if okSendData := sendData(bootstrapPayload); !okSendData {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				if ctx != nil {
+					completionErr = ctx.Err()
+				}
 				return
 			}
 			if streamInterceptorsActive {
@@ -489,11 +578,27 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		}
 		for {
 			chunk, ok, canceled := nextStreamChunk(ctx, nil, &streamClosedBeforeRead, chunks)
-			if canceled || !ok {
+			if canceled {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				if ctx != nil {
+					completionErr = ctx.Err()
+				}
+				return
+			}
+			if !ok {
 				return
 			}
 			if chunk.Err != nil {
-				_ = sendErr(executionErrorMessage(chunk.Err))
+				errMsg := executionErrorMessage(chunk.Err)
+				completionOutcome = pluginapi.RequestCompletionFailed
+				completionStatus = errMsg.StatusCode
+				completionErr = chunk.Err
+				if !sendErr(errMsg) && ctx != nil && ctx.Err() != nil {
+					completionOutcome = pluginapi.RequestCompletionCanceled
+					completionStatus = 0
+					completionErr = ctx.Err()
+				}
 				return
 			}
 			if len(chunk.Payload) == 0 {
@@ -501,13 +606,25 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 			}
 			payload, deliverable, errMsg := transformStreamPayload(chunk.Payload, &chunkIndex, historyChunks)
 			if errMsg != nil {
-				_ = sendErr(errMsg)
+				completionOutcome = pluginapi.RequestCompletionFailed
+				completionStatus = errMsg.StatusCode
+				completionErr = errMsg.Error
+				if !sendErr(errMsg) && ctx != nil && ctx.Err() != nil {
+					completionOutcome = pluginapi.RequestCompletionCanceled
+					completionStatus = 0
+					completionErr = ctx.Err()
+				}
 				return
 			}
 			if !deliverable {
 				continue
 			}
 			if okSendData := sendData(payload); !okSendData {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				if ctx != nil {
+					completionErr = ctx.Err()
+				}
 				return
 			}
 			if streamInterceptorsActive {

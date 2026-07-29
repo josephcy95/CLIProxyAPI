@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -68,6 +69,9 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	if auth == nil {
 		return nil, nil
 	}
+	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
+		return nil, fmt.Errorf("register auth: %w", errWeight)
+	}
 	if auth.ID == "" {
 		auth.ID = uuid.NewString()
 	}
@@ -78,8 +82,9 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	recoverQoderQuotaProbeDisable(auth, now)
 	// Rebuild in-memory cooldown/counters from auth-file runtime block.
 	hydrateAuthRuntimeFromMetadata(auth, now)
+	clearedCooldown := false
 	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
-		_ = clearCooldownStateForAuth(auth, now)
+		clearedCooldown = clearCooldownStateForAuth(auth, now)
 	}
 	auth.EnsureIndex()
 	authClone := auth.Clone()
@@ -95,6 +100,9 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	m.queueRefreshReschedule(auth.ID)
 	_ = m.persist(ctx, auth)
 	m.hook.OnAuthRegistered(ctx, auth.Clone())
+	if clearedCooldown {
+		m.persistCooldownStates(ctx)
+	}
 	return auth.Clone(), nil
 }
 
@@ -102,6 +110,9 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	if auth == nil || auth.ID == "" {
 		return nil, nil
+	}
+	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
+		return nil, fmt.Errorf("update auth: %w", errWeight)
 	}
 	now := time.Now()
 	// Watcher updates carry persisted runtime state in metadata. Hydrate it before
@@ -125,29 +136,27 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	if !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {
 		auth.ModelStates = mergeModelStatesConservatively(existing.ModelStates, auth.ModelStates, now)
 	}
+	clearedCooldown := false
 	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
-		_ = clearCooldownStateForAuth(auth, now)
+		clearedCooldown = clearCooldownStateForAuth(auth, now)
 	}
 	auth.EnsureIndex()
-	if auth.Metadata != nil {
-		syncAuthRuntimeMetadata(auth, now)
-	}
 	authClone := auth.Clone()
-	persistSnapshot := authClone.Clone()
 	m.auths[auth.ID] = authClone
 	m.mu.Unlock()
-	if m.scheduler != nil {
-		m.scheduler.upsertAuth(authClone)
-	}
 	if !shouldDeferAPIKeyModelAliasRebuild(ctx) {
 		m.rebuildAPIKeyModelAliasFromRuntimeConfig()
 	}
-	m.queueRefreshReschedule(auth.ID)
-	if errPersist := m.persist(ctx, persistSnapshot); errPersist != nil {
-		logEntryWithRequestID(ctx).WithField("auth_id", authClone.ID).Warnf("failed to persist auth update: %v", errPersist)
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(authClone)
 	}
-	m.hook.OnAuthUpdated(ctx, authClone.Clone())
-	return authClone.Clone(), nil
+	m.queueRefreshReschedule(auth.ID)
+	_ = m.persist(ctx, auth)
+	m.hook.OnAuthUpdated(ctx, auth.Clone())
+	if clearedCooldown {
+		m.persistCooldownStates(ctx)
+	}
+	return auth.Clone(), nil
 }
 
 // Remove deletes an auth from runtime state without persisting.
@@ -230,6 +239,9 @@ func (m *Manager) Load(ctx context.Context) error {
 		if auth == nil || auth.ID == "" {
 			continue
 		}
+		if errWeight := ValidateAuthWeight(auth); errWeight != nil {
+			continue
+		}
 		hydrateAuthRuntimeFromMetadata(auth, now)
 		recoverQoderQuotaProbeDisable(auth, now)
 		if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
@@ -251,6 +263,9 @@ func (m *Manager) Load(ctx context.Context) error {
 func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if m.store == nil || auth == nil {
 		return nil
+	}
+	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
+		return fmt.Errorf("persist auth: %w", errWeight)
 	}
 	if shouldSkipPersist(ctx) {
 		return nil
