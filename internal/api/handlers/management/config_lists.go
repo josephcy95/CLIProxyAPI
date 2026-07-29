@@ -1219,14 +1219,18 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 }
 func (h *Handler) PatchCodexKey(c *gin.Context) {
 	type codexKeyPatch struct {
-		APIKey         *string              `json:"api-key"`
-		Weight         json.RawMessage      `json:"weight"`
-		Prefix         *string              `json:"prefix"`
-		BaseURL        *string              `json:"base-url"`
-		ProxyURL       *string              `json:"proxy-url"`
-		Models         *[]config.CodexModel `json:"models"`
-		Headers        *map[string]string   `json:"headers"`
-		ExcludedModels *[]string            `json:"excluded-models"`
+		APIKey                   *string              `json:"api-key"`
+		Priority                 *int                 `json:"priority"`
+		Weight                   json.RawMessage      `json:"weight"`
+		Prefix                   *string              `json:"prefix"`
+		BaseURL                  *string              `json:"base-url"`
+		Websockets               *bool                `json:"websockets"`
+		ProxyURL                 *string              `json:"proxy-url"`
+		Models                   *[]config.CodexModel `json:"models"`
+		Headers                  *map[string]string   `json:"headers"`
+		ExcludedModels           *[]string            `json:"excluded-models"`
+		DisableCooling           *bool                `json:"disable-cooling"`
+		AllowPrivateInstructions *bool                `json:"allow_private_instructions"`
 	}
 	var body struct {
 		Index *int           `json:"index"`
@@ -1262,6 +1266,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	if body.Value.APIKey != nil {
 		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
 	}
+	if body.Value.Priority != nil {
+		entry.Priority = *body.Value.Priority
+	}
 	if len(body.Value.Weight) > 0 {
 		weight, errWeight := parseCredentialWeightPatch(body.Value.Weight)
 		if errWeight != nil {
@@ -1283,6 +1290,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 		}
 		entry.BaseURL = trimmed
 	}
+	if body.Value.Websockets != nil {
+		entry.Websockets = *body.Value.Websockets
+	}
 	if body.Value.ProxyURL != nil {
 		entry.ProxyURL = strings.TrimSpace(*body.Value.ProxyURL)
 	}
@@ -1294,6 +1304,12 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.ExcludedModels != nil {
 		entry.ExcludedModels = config.NormalizeExcludedModels(*body.Value.ExcludedModels)
+	}
+	if body.Value.DisableCooling != nil {
+		entry.DisableCooling = *body.Value.DisableCooling
+	}
+	if body.Value.AllowPrivateInstructions != nil {
+		entry.AllowPrivateInstructions = *body.Value.AllowPrivateInstructions
 	}
 	normalizeCodexKey(&entry)
 	h.cfg.CodexKey[targetIndex] = entry

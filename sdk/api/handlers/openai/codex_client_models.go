@@ -1,13 +1,39 @@
 package openai
 
 import (
+	"strings"
+
 	codexmodels "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/models"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/codexinstructions"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 )
 
 func (h *OpenAIAPIHandler) codexClientModelsResponse() map[string]any {
 	optimizeMultiAgentV2 := h != nil && h.Cfg != nil && h.Cfg.CodexOptimizeMultiAgentV2
-	return codexmodels.BuildResponse(h.Models(), registry.GetGlobalRegistry().GetModelProviders, optimizeMultiAgentV2)
+	// Build from base registry models (without private virtual ids), then clone catalog
+	// entries so private variants keep full template/capability metadata.
+	baseModels := registry.GetGlobalRegistry().GetAvailableModels("openai")
+	built := codexmodels.BuildResponse(baseModels, codexClientProvidersForModel(h), optimizeMultiAgentV2)
+	if raw, ok := built["models"].([]map[string]any); ok {
+		built["models"] = handlers.ExpandPrivateCodexClientModels(h.AuthManager, raw)
+	}
+	return built
+}
+
+func codexClientProvidersForModel(h *OpenAIAPIHandler) codexmodels.ProvidersForModelFunc {
+	markers := codexinstructions.DefaultMarkers()
+	if h != nil && h.AuthManager != nil {
+		markers = h.AuthManager.CodexInstructionMarkers()
+	}
+	markers = codexinstructions.NormalizeMarkers(markers)
+	return func(id string) []string {
+		base, private := codexinstructions.ParseModel(strings.TrimSpace(id), markers)
+		if !private || base == "" {
+			base = strings.TrimSpace(id)
+		}
+		return registry.GetGlobalRegistry().GetModelProviders(base)
+	}
 }
 
 // CodexClientModelsResponse builds a Codex client model response.

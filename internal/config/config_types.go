@@ -440,6 +440,11 @@ type CodexKey struct {
 
 	// DisableCooling disables auth/model cooldown scheduling for this credential when true.
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
+
+	// AllowPrivateInstructions marks this Codex API-key credential for private instruction
+	// injection and selection when require-auth-allow / reserve-marked-auths are enabled.
+	// Only meaningful for codex-api-key entries (xAI reuses this struct but ignores the flag).
+	AllowPrivateInstructions bool `yaml:"allow_private_instructions,omitempty" json:"allow_private_instructions,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string { return k.APIKey }

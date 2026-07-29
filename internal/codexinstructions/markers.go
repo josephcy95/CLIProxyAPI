@@ -116,7 +116,50 @@ func ModelMatches(patterns []string, model string) bool {
 			return true
 		}
 	}
+	// Provider-prefixed ids (e.g. kiro/gpt-5.6-luna) should still match bare patterns.
+	if idx := strings.LastIndex(model, "/"); idx >= 0 && idx+1 < len(model) {
+		return ModelMatches(patterns, model[idx+1:])
+	}
 	return false
+}
+
+// VirtualModelIDs returns private catalog ids for a base model using configured markers.
+// Skips ids that already carry a private marker.
+func VirtualModelIDs(baseID string, markers MarkerConfig) []string {
+	baseID = strings.TrimSpace(baseID)
+	if baseID == "" {
+		return nil
+	}
+	markers = NormalizeMarkers(markers)
+	if _, alreadyPrivate := ParseModel(baseID, markers); alreadyPrivate {
+		return nil
+	}
+	out := make([]string, 0, len(markers.Prefixes)+len(markers.Suffixes))
+	seen := make(map[string]struct{}, len(markers.Prefixes)+len(markers.Suffixes))
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" || id == baseID {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	for _, prefix := range markers.Prefixes {
+		if prefix == "" {
+			continue
+		}
+		add(prefix + baseID)
+	}
+	for _, suffix := range markers.Suffixes {
+		if suffix == "" {
+			continue
+		}
+		add(baseID + suffix)
+	}
+	return out
 }
 
 func matchModelPattern(pattern, value string) bool {

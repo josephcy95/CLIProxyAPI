@@ -574,6 +574,19 @@ func (m *Manager) CodexInstructionMarkers() codexinstructions.MarkerConfig {
 	}
 }
 
+// CodexInstructionsConfig returns a copy of the runtime private-instructions config, or nil.
+func (m *Manager) CodexInstructionsConfig() *internalconfig.CodexInstructionsConfig {
+	if m == nil {
+		return nil
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	if cfg == nil {
+		return nil
+	}
+	copyCfg := cfg.Codex.Instructions
+	return &copyCfg
+}
+
 // CodexInstructionsApplyWithoutPrefixSuffix reports whether a model should use private mode without markers.
 func (m *Manager) CodexInstructionsApplyWithoutPrefixSuffix(model string) bool {
 	if m == nil {

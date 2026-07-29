@@ -309,10 +309,10 @@ codex:
     # When true, private mode is request-opt-in via model markers, e.g. private/gpt-5.6-sol
     # or gpt-5.6-sol-private. Set false to inject private instructions for every eligible request.
     use-prefix-suffix: true
-    # Mark eligible auth files with:
+    # Mark eligible auth files or codex-api-key entries with:
     #   "allow_private_instructions": true
     require-auth-allow: true
-    # When true, marked auths are reserved for private requests only.
+    # When true, marked credentials are reserved for private requests only.
     # Default false keeps marked accounts available for normal traffic too.
     reserve-marked-auths: false
     request-markers:
@@ -394,6 +394,7 @@ nonstream-keepalive-interval: 0
 #     weight: 5 # optional: weighted-round-robin share; omitted defaults to 1; maximum 1,000,000
 #     prefix: "test" # optional: require calls like "test/gpt-5-codex" to target this credential
 #     disable-cooling: false # optional: per-auth override for auth/model cooldown scheduling
+#     allow_private_instructions: false # optional: allow private Codex instructions on this key
 #     base-url: "https://www.example.com" # use the custom codex API endpoint
 #     headers:
 #       X-Custom-Header: "custom-value"

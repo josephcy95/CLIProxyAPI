@@ -41,7 +41,26 @@ func TestModelMatches(t *testing.T) {
 	if !ModelMatches([]string{"gpt-5*"}, "gpt-5.5") {
 		t.Fatal("expected gpt-5.5 to match gpt-5*")
 	}
+	if !ModelMatches([]string{"gpt-5*"}, "kiro/gpt-5.6-luna") {
+		t.Fatal("expected provider-prefixed gpt-5 model to match gpt-5*")
+	}
 	if ModelMatches([]string{"gpt-5*"}, "grok-4.5") {
 		t.Fatal("did not expect grok-4.5 to match gpt-5*")
+	}
+}
+
+func TestVirtualModelIDs(t *testing.T) {
+	ids := VirtualModelIDs("gpt-5.5", DefaultMarkers())
+	want := map[string]bool{"private/gpt-5.5": true, "gpt-5.5-private": true}
+	if len(ids) != len(want) {
+		t.Fatalf("VirtualModelIDs len = %d (%v), want %d", len(ids), ids, len(want))
+	}
+	for _, id := range ids {
+		if !want[id] {
+			t.Fatalf("unexpected virtual id %q", id)
+		}
+	}
+	if got := VirtualModelIDs("private/gpt-5.5", DefaultMarkers()); len(got) != 0 {
+		t.Fatalf("already-private model should not expand, got %v", got)
 	}
 }

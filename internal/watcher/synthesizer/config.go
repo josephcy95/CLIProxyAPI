@@ -219,6 +219,10 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 		if entry.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		// Codex-only: API-key providers can opt into private instructions the same way auth files do.
+		if provider == "codex" && entry.AllowPrivateInstructions {
+			attrs["allow_private_instructions"] = "true"
+		}
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
 		}
