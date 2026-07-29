@@ -250,8 +250,40 @@ func ResolvePrice(candidates []string, prices map[string]ModelPrice, aliases map
 	return ModelPrice{}, "", false
 }
 
-// EstimateCost computes dollar cost for token usage.
+// BillableInputTokens returns prompt tokens charged at the full prompt rate.
+//
+// OpenAI-compatible providers often report input_tokens inclusive of cache reads;
+// when cache_read is present and not larger than input, those tokens are excluded
+// here and billed at the cache-read rate instead. Anthropic-style rows (input is
+// already net, cache_read may exceed input) keep the full input amount.
+func BillableInputTokens(input, cacheRead int64) int64 {
+	if cacheRead > 0 && input >= cacheRead {
+		return input - cacheRead
+	}
+	return input
+}
+
+// sqlBillableInputExpr is the per-row SQL equivalent of BillableInputTokens.
+// Aggregating SUM(input) then netting SUM(cache_read) is NOT equivalent when a
+// range mixes inclusive-input and net-input rows: the large cache total can be
+// subtracted from another period's input and under-count cost on longer windows.
+const sqlBillableInputExpr = `CASE WHEN cache_read_tokens > 0 AND input_tokens >= cache_read_tokens THEN input_tokens - cache_read_tokens ELSE input_tokens END`
+
+// sqlCachedOnlyExpr sums legacy cached_tokens only on rows that lack explicit
+// cache read/creation breakdown (matches EstimateCost's residual cached path).
+const sqlCachedOnlyExpr = `CASE WHEN IFNULL(cache_read_tokens,0) = 0 AND IFNULL(cache_creation_tokens,0) = 0 THEN cached_tokens ELSE 0 END`
+
+// EstimateCost computes dollar cost for token usage on a single event (or any
+// row-shaped token tuple). Prefer SumCost / CostBy* for multi-row aggregates so
+// billable input is netted per row before summing.
 func EstimateCost(price ModelPrice, input, output, reasoning, cacheRead, cacheCreation, cached int64) float64 {
+	return EstimateCostParts(price, BillableInputTokens(input, cacheRead), output, reasoning, cacheRead, cacheCreation, cached)
+}
+
+// EstimateCostParts applies the price book to already-resolved token buckets.
+// billableInput must already exclude inclusive cache-read tokens when appropriate
+// (see BillableInputTokens / sqlBillableInputExpr); this function does not net again.
+func EstimateCostParts(price ModelPrice, billableInput, output, reasoning, cacheRead, cacheCreation, cached int64) float64 {
 	const perM = 1_000_000.0
 	// Prefer explicit cache read/creation; residual cached tokens use cache or cache_read rate.
 	cacheReadRate := price.CacheReadPer1M
@@ -261,11 +293,6 @@ func EstimateCost(price ModelPrice, input, output, reasoning, cacheRead, cacheCr
 	cacheCreateRate := price.CacheCreationPer1M
 	if cacheCreateRate <= 0 {
 		cacheCreateRate = price.PromptPer1M * 1.25
-	}
-	// Input billed net of cache-read tokens when cache read is present.
-	billableInput := input
-	if cacheRead > 0 && billableInput >= cacheRead {
-		billableInput -= cacheRead
 	}
 	cost := 0.0
 	cost += float64(billableInput) / perM * price.PromptPer1M

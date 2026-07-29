@@ -26,11 +26,15 @@ type QueryFilter struct {
 
 // Summary is aggregate metrics for a filtered range.
 type Summary struct {
-	TotalCalls          int64   `json:"total_calls"`
-	SuccessCalls        int64   `json:"success_calls"`
-	FailureCalls        int64   `json:"failure_calls"`
-	SuccessRate         float64 `json:"success_rate"`
-	InputTokens         int64   `json:"input_tokens"`
+	TotalCalls   int64   `json:"total_calls"`
+	SuccessCalls int64   `json:"success_calls"`
+	FailureCalls int64   `json:"failure_calls"`
+	SuccessRate  float64 `json:"success_rate"`
+	InputTokens  int64   `json:"input_tokens"`
+	// NetInputTokens is per-row billable/uncached input (see BillableInputTokens),
+	// summed in SQL. Do not derive this as input_tokens - cache_read_tokens on the
+	// aggregates — mixed inclusive/net reporting makes that under-count longer ranges.
+	NetInputTokens      int64   `json:"net_input_tokens"`
 	OutputTokens        int64   `json:"output_tokens"`
 	ReasoningTokens     int64   `json:"reasoning_tokens"`
 	CachedTokens        int64   `json:"cached_tokens"`
@@ -221,6 +225,7 @@ func (s *Store) GetSummary(ctx context.Context, filter QueryFilter) (Summary, er
 		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
 		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
 		IFNULL(SUM(input_tokens),0),
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0),
 		IFNULL(SUM(output_tokens),0),
 		IFNULL(SUM(reasoning_tokens),0),
 		IFNULL(SUM(cached_tokens),0),
@@ -232,7 +237,7 @@ func (s *Store) GetSummary(ctx context.Context, filter QueryFilter) (Summary, er
 		FROM usage_events ` + where
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&summary.TotalCalls, &summary.SuccessCalls, &summary.FailureCalls,
-		&summary.InputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
+		&summary.InputTokens, &summary.NetInputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
 		&summary.CachedTokens, &summary.CacheReadTokens, &summary.CacheCreationTokens,
 		&summary.TotalTokens, &summary.AvgLatencyMS, &summary.AvgTTFTMS,
 	)
@@ -295,9 +300,11 @@ func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit i
 // SumCost computes the total estimated cost and priced-call count across ALL
 // events matching the filter. It aggregates token counts per (model, alias) in
 // SQL and applies the price book once per group, so the result covers every
-// matching row. This replaces materializing a capped page of events (which
-// silently undercounts cost once the match count exceeds the page limit and
-// breaks the "per-model costs sum to the total" invariant).
+// matching row. Billable input is netted per row before SUM so mixed
+// inclusive-input / net-input cache accounting cannot under-count longer ranges.
+// This replaces materializing a capped page of events (which silently undercounts
+// cost once the match count exceeds the page limit and breaks the "per-model
+// costs sum to the total" invariant).
 func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (float64, int64, error) {
 	if s == nil {
 		return 0, 0, fmt.Errorf("usagestore: nil store")
@@ -306,8 +313,8 @@ func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[stri
 	filter.Limit = 0
 	where, args := buildWhere(filter)
 	query := `SELECT IFNULL(model,''), IFNULL(alias,''),
-		IFNULL(SUM(input_tokens),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
-		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(cached_tokens),0),
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0),
 		COUNT(*)
 		FROM usage_events ` + where + `
 		GROUP BY model, alias`
@@ -320,8 +327,8 @@ func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[stri
 	var priced int64
 	for rows.Next() {
 		var model, alias string
-		var input, output, reasoning, cacheRead, cacheCreation, cached, count int64
-		if err := rows.Scan(&model, &alias, &input, &output, &reasoning,
+		var billableInput, output, reasoning, cacheRead, cacheCreation, cached, count int64
+		if err := rows.Scan(&model, &alias, &billableInput, &output, &reasoning,
 			&cacheRead, &cacheCreation, &cached, &count); err != nil {
 			return 0, 0, err
 		}
@@ -329,7 +336,8 @@ func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[stri
 		if !ok {
 			continue
 		}
-		total += EstimateCost(p, input, output, reasoning, cacheRead, cacheCreation, cached)
+		// billableInput is already per-row netted; cacheRead is the raw sum for cache pricing.
+		total += EstimateCostParts(p, billableInput, output, reasoning, cacheRead, cacheCreation, cached)
 		priced += count
 	}
 	return total, priced, rows.Err()
@@ -347,8 +355,8 @@ func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices ma
 	where, args := buildWhere(filter)
 	query := `SELECT IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
 		IFNULL(model,''), IFNULL(alias,''),
-		IFNULL(SUM(input_tokens),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
-		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(cached_tokens),0)
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0)
 		FROM usage_events ` + where + `
 		GROUP BY auth_index, source, source_hash, provider, model, alias`
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -359,9 +367,9 @@ func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices ma
 	out := make(map[string]float64)
 	for rows.Next() {
 		var authIndex, source, sourceHash, provider, model, alias string
-		var input, output, reasoning, cacheRead, cacheCreation, cached int64
+		var billableInput, output, reasoning, cacheRead, cacheCreation, cached int64
 		if err := rows.Scan(&authIndex, &source, &sourceHash, &provider, &model, &alias,
-			&input, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
+			&billableInput, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
 			return nil, err
 		}
 		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
@@ -369,7 +377,7 @@ func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices ma
 			continue
 		}
 		key := AccountKey(authIndex, source, sourceHash, provider)
-		out[key] += EstimateCost(p, input, output, reasoning, cacheRead, cacheCreation, cached)
+		out[key] += EstimateCostParts(p, billableInput, output, reasoning, cacheRead, cacheCreation, cached)
 	}
 	return out, rows.Err()
 }
@@ -436,8 +444,8 @@ func (s *Store) CostByAPIKey(ctx context.Context, filter QueryFilter, prices map
 	where, args := buildWhere(filter)
 	query := `SELECT IFNULL(api_key,''), IFNULL(api_key_hash,''),
 		IFNULL(model,''), IFNULL(alias,''),
-		IFNULL(SUM(input_tokens),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
-		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(cached_tokens),0)
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0)
 		FROM usage_events ` + where + `
 		GROUP BY api_key, api_key_hash, model, alias`
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -448,9 +456,9 @@ func (s *Store) CostByAPIKey(ctx context.Context, filter QueryFilter, prices map
 	out := make(map[string]float64)
 	for rows.Next() {
 		var apiKey, apiKeyHash, model, alias string
-		var input, output, reasoning, cacheRead, cacheCreation, cached int64
+		var billableInput, output, reasoning, cacheRead, cacheCreation, cached int64
 		if err := rows.Scan(&apiKey, &apiKeyHash, &model, &alias,
-			&input, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
+			&billableInput, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
 			return nil, err
 		}
 		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
@@ -458,7 +466,7 @@ func (s *Store) CostByAPIKey(ctx context.Context, filter QueryFilter, prices map
 			continue
 		}
 		key := APIKeyGroupKey(apiKey, apiKeyHash)
-		out[key] += EstimateCost(p, input, output, reasoning, cacheRead, cacheCreation, cached)
+		out[key] += EstimateCostParts(p, billableInput, output, reasoning, cacheRead, cacheCreation, cached)
 	}
 	return out, rows.Err()
 }
