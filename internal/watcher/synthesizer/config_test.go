@@ -313,6 +313,7 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 					Websockets:               true,
 					DisableCooling:           true,
 					AllowPrivateInstructions: true,
+					AlphaSearch:              true,
 				},
 			},
 		},
@@ -343,6 +344,9 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 	if auths[0].Attributes["allow_private_instructions"] != "true" {
 		t.Errorf("expected allow_private_instructions=true, got %s", auths[0].Attributes["allow_private_instructions"])
 	}
+	if auths[0].Attributes[coreauth.AttributeCodexAlphaSearch] != "true" {
+		t.Errorf("expected codex_alpha_search=true, got %s", auths[0].Attributes[coreauth.AttributeCodexAlphaSearch])
+	}
 	if v, ok := auths[0].Metadata["disable_cooling"].(bool); !ok || !v {
 		t.Errorf("expected disable_cooling=true, got %v", auths[0].Metadata["disable_cooling"])
 	}
@@ -358,6 +362,7 @@ func TestConfigSynthesizer_XAIKeys(t *testing.T) {
 				BaseURL:        "https://api.x.ai/v1",
 				ProxyURL:       "http://proxy.local",
 				Websockets:     true,
+				AlphaSearch:    true,
 				DisableCooling: true,
 				Headers:        map[string]string{"X-Custom": "value"},
 				Models:         []config.XAIModel{{Name: "grok-4.5", Alias: "grok-latest"}},
@@ -383,6 +388,9 @@ func TestConfigSynthesizer_XAIKeys(t *testing.T) {
 	}
 	if auth.Attributes["websockets"] != "true" {
 		t.Fatalf("websockets = %q, want true", auth.Attributes["websockets"])
+	}
+	if _, exists := auth.Attributes[coreauth.AttributeCodexAlphaSearch]; exists {
+		t.Fatal("xAI auth unexpectedly contains codex_alpha_search")
 	}
 	if auth.Attributes["base_url"] != "https://api.x.ai/v1" {
 		t.Fatalf("base_url = %q, want https://api.x.ai/v1", auth.Attributes["base_url"])
@@ -424,6 +432,9 @@ func TestConfigSynthesizer_CodexKeys_SkipsEmptyAndHeaders(t *testing.T) {
 	}
 	if auths[0].Attributes["header:Authorization"] != "Bearer xyz" {
 		t.Errorf("expected header:Authorization=Bearer xyz, got %s", auths[0].Attributes["header:Authorization"])
+	}
+	if _, exists := auths[0].Attributes[coreauth.AttributeCodexAlphaSearch]; exists {
+		t.Fatal("default alpha-search=false unexpectedly generated codex_alpha_search")
 	}
 }
 

@@ -30,7 +30,7 @@ const (
 //	  }
 //	}
 type authRuntimeModelState struct {
-	CooldownUntil    time.Time `json:"cooldown_until,omitempty"`
+	CooldownUntil   time.Time `json:"cooldown_until,omitempty"`
 	Reason          string    `json:"reason,omitempty"`
 	HTTPStatus      int       `json:"http_status,omitempty"`
 	LastResponse    string    `json:"last_response,omitempty"`

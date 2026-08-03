@@ -120,8 +120,6 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 			if entry := s.resolveConfigCodexKey(a); entry != nil {
 				models = buildCodexConfigModels(entry)
 				excluded = entry.ExcludedModels
-			} else {
-				models = nil
 			}
 			models = applyExcludedModels(models, excluded)
 			break
@@ -494,39 +492,41 @@ func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
 	if s == nil || s.cfg == nil {
 		return nil
 	}
-	return resolveConfigCodexStyleKey(auth, s.cfg.CodexKey)
+	return resolveConfigCodexStyleKey(auth, s.cfg.CodexKey, true)
 }
 
 func (s *Service) resolveConfigXAIKey(auth *coreauth.Auth) *config.XAIKey {
 	if s == nil || s.cfg == nil {
 		return nil
 	}
-	return resolveConfigCodexStyleKey(auth, s.cfg.XAIKey)
+	return resolveConfigCodexStyleKey(auth, s.cfg.XAIKey, false)
 }
 
-func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey) *config.CodexKey {
+func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey, validateIndexCredentials bool) *config.CodexKey {
 	if auth == nil {
 		return nil
-	}
-	if entry := configEntryForAuthIndex(auth, entries); entry != nil {
-		return entry
 	}
 	var attrKey, attrBase string
 	if auth.Attributes != nil {
 		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
 		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
 	}
-	for i := range entries {
-		entry := &entries[i]
+	matchesCredentials := func(entry *config.CodexKey) bool {
+		if entry == nil {
+			return false
+		}
 		cfgKey := strings.TrimSpace(entry.APIKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
-			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
-				return entry
-			}
-			continue
+		if attrKey != "" {
+			return strings.EqualFold(cfgKey, attrKey) && (cfgBase == "" || strings.EqualFold(cfgBase, attrBase))
 		}
-		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
+		return attrBase != "" && strings.EqualFold(cfgBase, attrBase)
+	}
+	if entry := configEntryForAuthIndex(auth, entries); entry != nil && (!validateIndexCredentials || matchesCredentials(entry)) {
+		return entry
+	}
+	for i := range entries {
+		if entry := &entries[i]; matchesCredentials(entry) {
 			return entry
 		}
 	}
@@ -695,6 +695,10 @@ type modelEntry interface {
 	GetThinking() *registry.ThinkingSupport
 }
 
+type modelMaxContextLengthEntry interface {
+	GetMaxContextLength() int
+}
+
 func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, created int64, fallbackDisplayName string, userDefined bool) *ModelInfo {
 	name := strings.TrimSpace(model.GetName())
 	alias := strings.TrimSpace(model.GetAlias())
@@ -711,7 +715,7 @@ func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, creat
 	if displayName == "" {
 		displayName = alias
 	}
-	return &ModelInfo{
+	info := &ModelInfo{
 		ID:          alias,
 		Object:      "model",
 		Created:     created,
@@ -720,6 +724,13 @@ func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, creat
 		DisplayName: displayName,
 		UserDefined: userDefined,
 	}
+	if maxContextModel, okMaxContext := any(model).(modelMaxContextLengthEntry); okMaxContext {
+		if maxContextLength := maxContextModel.GetMaxContextLength(); maxContextLength > 0 {
+			info.ContextLength = maxContextLength
+			info.MaxContextLength = maxContextLength
+		}
+	}
+	return info
 }
 
 func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []*ModelInfo {
@@ -832,6 +843,9 @@ func buildXAIConfigModels(entry *config.XAIKey) []*ModelInfo {
 func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
 	if entry == nil {
 		return nil
+	}
+	if len(entry.Models) == 0 {
+		return registry.GetCodexProModels()
 	}
 
 	models := buildConfigModels(entry.Models, "openai", "openai")
