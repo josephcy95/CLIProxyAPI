@@ -1950,6 +1950,8 @@ var managementRouteContract = []struct {
 	{http.MethodPut, "/v0/management/codex-instructions"},
 	{http.MethodGet, "/v0/management/codex-failure-config"},
 	{http.MethodPut, "/v0/management/codex-failure-config"},
+	{http.MethodGet, "/v0/management/codex-routing-config"},
+	{http.MethodPut, "/v0/management/codex-routing-config"},
 	// Model metadata (Dashboard tooltip + Model Context page).
 	{http.MethodGet, "/v0/management/model-sources"},
 	{http.MethodPost, "/v0/management/playground/chat"},

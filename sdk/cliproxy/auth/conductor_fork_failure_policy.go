@@ -35,6 +35,21 @@ func codexInstructionsSelectionConfig(m *Manager) (requireAllow bool, reserveMar
 	return requireAllow, cfg.Codex.Instructions.ReserveMarkedAuths
 }
 
+func codexPreferFreeForSharedModels(m *Manager) bool {
+	if m == nil {
+		return false
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	return cfg != nil && cfg.Codex.Routing.PreferFreeForSharedModels
+}
+
+func isCodexCredential(auth *Auth) bool {
+	if auth == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") || executorKeyFromAuth(auth) == "codex"
+}
+
 // authMatchesPrivateInstructionsPolicy filters candidates for private/normal instruction mode.
 // Private requests optionally require allow_private_instructions.
 // When reserve-marked-auths is enabled, marked auths are excluded from normal traffic.

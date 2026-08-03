@@ -30,6 +30,13 @@ type CodexInstructionMarkersConfig struct {
 	Suffixes []string `yaml:"suffixes,omitempty" json:"suffixes,omitempty"`
 }
 
+// CodexRoutingConfig configures account-tier-aware Codex credential selection.
+type CodexRoutingConfig struct {
+	// PreferFreeForSharedModels routes models supported by ready Free accounts to
+	// those accounts before using higher-tier credentials.
+	PreferFreeForSharedModels bool `yaml:"prefer-free-for-shared-models,omitempty" json:"prefer-free-for-shared-models,omitempty"`
+}
+
 // DefaultCodexFailurePolicy returns Codex credential failure defaults when keys are omitted.
 func DefaultCodexFailurePolicy() CodexConfig {
 	autoDisable := true

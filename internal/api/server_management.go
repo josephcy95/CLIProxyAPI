@@ -151,6 +151,9 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/codex-failure-config", s.mgmt.GetCodexFailureConfig)
 		mgmt.PUT("/codex-failure-config", s.mgmt.PutCodexFailureConfig)
 		mgmt.PATCH("/codex-failure-config", s.mgmt.PutCodexFailureConfig)
+		mgmt.GET("/codex-routing-config", s.mgmt.GetCodexRoutingConfig)
+		mgmt.PUT("/codex-routing-config", s.mgmt.PutCodexRoutingConfig)
+		mgmt.PATCH("/codex-routing-config", s.mgmt.PutCodexRoutingConfig)
 
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)

@@ -44,16 +44,18 @@ type authScheduler struct {
 	// scheduledAuthPredicate can exclude ineligible auths before advancing WRR/RR state.
 	codexRequireAuthAllow   bool
 	codexReserveMarkedAuths bool
+	codexPreferFreeAuths    bool
 }
 
-// setCodexInstructionsPolicy updates the fork private-instructions gates used during picks.
-func (s *authScheduler) setCodexInstructionsPolicy(requireAllow, reserveMarked bool) {
+// setCodexSelectionPolicy updates fork Codex selection gates used during picks.
+func (s *authScheduler) setCodexSelectionPolicy(requireAllow, reserveMarked, preferFree bool) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	s.codexRequireAuthAllow = requireAllow
 	s.codexReserveMarkedAuths = reserveMarked
+	s.codexPreferFreeAuths = preferFree
 	s.mu.Unlock()
 }
 
@@ -258,6 +260,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	defer s.mu.Unlock()
 	eligibility.requireAuthAllow = s.codexRequireAuthAllow
 	eligibility.reserveMarkedAuths = s.codexReserveMarkedAuths
+	eligibility.preferFreeCodexAuths = s.codexPreferFreeAuths
 	if strategy == schedulerStrategyCurrent {
 		strategy = s.strategy
 	}
@@ -270,6 +273,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+	predicate = shard.preferFreeCodexPredicateLocked(providerKey, eligibility.preferFreeCodexAuths, predicate)
 	if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
 		return picked, nil
 	}
@@ -319,6 +323,7 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 	defer s.mu.Unlock()
 	eligibility.requireAuthAllow = s.codexRequireAuthAllow
 	eligibility.reserveMarkedAuths = s.codexReserveMarkedAuths
+	eligibility.preferFreeCodexAuths = s.codexPreferFreeAuths
 	if strategy == schedulerStrategyCurrent {
 		strategy = s.strategy
 	}
@@ -341,8 +346,6 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 
 	predicate := scheduledAuthPredicate(eligibility, tried, "", strategy == schedulerStrategyWeightedRoundRobin)
 	candidateShards := make([]*modelScheduler, len(normalized))
-	bestPriority := 0
-	hasCandidate := false
 	now := time.Now()
 	for providerIndex, providerKey := range normalized {
 		providerState := s.providers[providerKey]
@@ -351,6 +354,16 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 		}
 		shard := providerState.ensureModelLocked(modelKey, now)
 		candidateShards[providerIndex] = shard
+	}
+	for providerIndex, providerKey := range normalized {
+		if providerKey == "codex" && candidateShards[providerIndex] != nil {
+			predicate = candidateShards[providerIndex].preferFreeCodexPredicateLocked(providerKey, eligibility.preferFreeCodexAuths, predicate)
+			break
+		}
+	}
+	bestPriority := 0
+	hasCandidate := false
+	for _, shard := range candidateShards {
 		if shard == nil {
 			continue
 		}
@@ -815,6 +828,35 @@ func (m *modelScheduler) pickReadyLocked(preferWebsocket bool, strategy schedule
 		return nil
 	}
 	return m.pickReadyAtPriorityLocked(preferWebsocket, priorityReady, strategy, predicate)
+}
+
+// preferFreeCodexPredicateLocked restricts Codex candidates to ready Free
+// credentials when the policy is enabled. It leaves non-Codex entries untouched
+// when used by mixed-provider selection.
+func (m *modelScheduler) preferFreeCodexPredicateLocked(providerKey string, enabled bool, predicate func(*scheduledAuth) bool) func(*scheduledAuth) bool {
+	if m == nil || !enabled || providerKey != "codex" {
+		return predicate
+	}
+	m.promoteExpiredLocked(time.Now())
+	hasReadyFree := false
+	for _, entry := range m.entries {
+		if entry == nil || entry.state != scheduledStateReady || !isFreeCodexAuth(entry.auth) {
+			continue
+		}
+		if predicate == nil || predicate(entry) {
+			hasReadyFree = true
+			break
+		}
+	}
+	if !hasReadyFree {
+		return predicate
+	}
+	return func(entry *scheduledAuth) bool {
+		if predicate != nil && !predicate(entry) {
+			return false
+		}
+		return entry != nil && (!isCodexCredential(entry.auth) || isFreeCodexAuth(entry.auth))
+	}
 }
 
 // highestReadyPriorityLocked returns the highest priority bucket that still has a matching ready auth.

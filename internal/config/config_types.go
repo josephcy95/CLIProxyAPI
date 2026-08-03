@@ -121,6 +121,8 @@ type CodexHeaderDefaults struct {
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
+	// Routing configures Codex account-tier selection behavior.
+	Routing CodexRoutingConfig `yaml:"routing,omitempty" json:"routing,omitempty"`
 	// AutoDisableAuthFailures permanently disables an auth file after confirmed
 	// auth-death failures (invalid token, invalid_grant, failed re-auth, etc.).
 	AutoDisableAuthFailures *bool `yaml:"auto-disable-auth-failures,omitempty" json:"auto-disable-auth-failures,omitempty"`

@@ -52,8 +52,9 @@ func isBuiltInSelector(selector Selector) bool {
 type requiredAuthKindContextKey struct{}
 
 type authSelectionEligibility struct {
-	requiredKind     string
-	disallowFreeAuth bool
+	requiredKind         string
+	disallowFreeAuth     bool
+	preferFreeCodexAuths bool
 	// Fork: Codex private-instructions selection policy.
 	privateInstructions bool
 	requireAuthAllow    bool
@@ -81,6 +82,7 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 func (m *Manager) authSelectionEligibilityForManager(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 	eligibility.requireAuthAllow, eligibility.reserveMarkedAuths = codexInstructionsSelectionConfig(m)
+	eligibility.preferFreeCodexAuths = codexPreferFreeForSharedModels(m)
 	return eligibility
 }
 
@@ -101,8 +103,16 @@ func (m *Manager) syncSchedulerFromSnapshot(auths []*Auth) {
 	if m == nil || m.scheduler == nil {
 		return
 	}
-	m.scheduler.setCodexInstructionsPolicy(codexInstructionsSelectionConfig(m))
+	m.syncSchedulerSelectionPolicy()
 	m.scheduler.rebuild(auths)
+}
+
+func (m *Manager) syncSchedulerSelectionPolicy() {
+	if m == nil || m.scheduler == nil {
+		return
+	}
+	requireAllow, reserveMarked := codexInstructionsSelectionConfig(m)
+	m.scheduler.setCodexSelectionPolicy(requireAllow, reserveMarked, codexPreferFreeForSharedModels(m))
 }
 
 func (m *Manager) syncScheduler() {
@@ -318,12 +328,14 @@ func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeModel string, now time.Time) ([]*Auth, error) {
+func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeModel string, now time.Time, preferFreeCodex bool) ([]*Auth, error) {
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}
 	}
 
 	availableByPriority := make(map[int][]*Auth)
+	preferredByPriority := make(map[int][]*Auth)
+	hasFreeCodex := false
 	cooldownCount := 0
 	var earliest time.Time
 	for _, candidate := range auths {
@@ -332,6 +344,12 @@ func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeMode
 		if !blocked {
 			priority := authPriority(candidate)
 			availableByPriority[priority] = append(availableByPriority[priority], candidate)
+			if !isCodexCredential(candidate) || isFreeCodexAuth(candidate) {
+				preferredByPriority[priority] = append(preferredByPriority[priority], candidate)
+			}
+			if isFreeCodexAuth(candidate) {
+				hasFreeCodex = true
+			}
 			continue
 		}
 		if reason == blockReasonCooldown {
@@ -355,6 +373,9 @@ func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeMode
 			return nil, newModelCooldownError(routeModel, providerForError, resetIn)
 		}
 		return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
+	}
+	if preferFreeCodex && hasFreeCodex {
+		availableByPriority = preferredByPriority
 	}
 
 	bestPriority := 0
@@ -1043,7 +1064,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
+	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now(), eligibility.preferFreeCodexAuths)
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		return nil, nil, errAvailable
@@ -1285,7 +1306,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
+	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now(), eligibility.preferFreeCodexAuths)
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		return nil, nil, "", errAvailable
