@@ -14,8 +14,17 @@ Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex/Qoder compatible APIs
 ### Upstream sync (preserve this fork)
 This fork exists for **custom behavior**. Upstream is for bug fixes and additive features — not to erase fork-only logic.
 
-- Prefer full merge of upstream release tags / `upstream/main` so the fork is not left “N commits behind”.
-- After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
+- Prefer a full merge of upstream release tags / `upstream/main` so the fork is not left “N commits behind”, but start it with `git merge --no-commit --no-ff upstream/<ref>`. Git applying a change cleanly does not authorize that change.
+- Do not create the merge commit until every resulting API change has passed the fork-preservation gate below. After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
+
+### API fork-preservation gate (mandatory before committing an upstream merge)
+1. Start from a clean worktree, record the pre-merge commit, fetch upstream, and perform a no-commit merge. Review the complete resulting diff against the recorded commit, including non-conflicting automatic changes, file deletions, renames, and splits.
+2. For every changed fork-owned file or shared function, classify the incoming diff: allowed functional/security fix to retain, manually combined change, or upstream change excluded in favor of the fork. Do not retain an upstream rewrite merely because it is in the same file as a valid fix.
+3. Existing fork behavior is the baseline. An upstream change to Codex backend calls, protocol translation, scheduling, provider wiring, configuration, management APIs, or storage may be integrated only when it preserves all currently working fork semantics and custom endpoints. If that cannot be proved, keep the fork behavior and ask the user rather than making a judgment call.
+4. Never wholesale accept an upstream version of a fork-owned function or file. Integrate the smallest necessary upstream behavior; preserve custom branches, registrations, filters, routes, call sites, configuration fields, and error handling.
+5. Before committing, run `gofmt`, the regression pins below, relevant focused tests for every changed behavior, `go test ./...`, and `go build -o test-output ./cmd/server && rm test-output`. For paths without automated coverage, trace the relevant end-to-end call path manually. A clean build is not sufficient proof.
+
+If the gate finds a removed, changed, or unproven fork behavior, restore/combine the fork implementation before committing, or abort the merge. Never commit an unsafe merge expecting a later revert to repair it.
 
 **Upstream may replace fork code only when** it fixes the same broken path, implements the same feature more robustly without dropping fork semantics, or is security/deploy-blocking in that area.
 
@@ -24,7 +33,7 @@ This fork exists for **custom behavior**. Upstream is for bug fixes and additive
 - would drop or break any item under “Fork features to preserve”
 - is large/ambiguous and you cannot prove fork features still work
 
-On conflicts: **keep fork features** by default; take upstream only for the narrow cases above; combine when both matter. Never resolve by deleting fork-only files or silently dropping selection filters / routes.
+On conflicts: **keep fork features** by default; take upstream only for the narrow cases above; combine when both matter. Never resolve by taking an entire upstream file/function, deleting fork-only files, or silently dropping selection filters / routes.
 
 - **File splits are high-risk.** Upstream regularly splits large files (`service.go`, `conductor.go`, `config.go`, `server.go`, `auth_files.go`, provider executors) into `*_topic.go`. A clean compile does **not** mean fork logic survived — switch cases, route tables, and call sites can disappear silently.
 - After any upstream merge that touches those areas, diff pre-merge vs HEAD for:
