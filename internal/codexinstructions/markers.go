@@ -16,25 +16,26 @@ const (
 
 // MarkerConfig controls how private-instruction model markers are recognized.
 type MarkerConfig struct {
-	Prefixes []string `yaml:"prefixes,omitempty" json:"prefixes,omitempty"`
-	Suffixes []string `yaml:"suffixes,omitempty" json:"suffixes,omitempty"`
+	Prefixes []string `yaml:"prefixes" json:"prefixes"`
+	Suffixes []string `yaml:"suffixes" json:"suffixes"`
 }
 
 // DefaultMarkers returns the default private model markers.
 func DefaultMarkers() MarkerConfig {
 	return MarkerConfig{
 		Prefixes: []string{"private/"},
-		Suffixes: []string{"-private"},
 	}
 }
 
-// NormalizeMarkers trims markers and falls back to defaults when both lists are empty.
+// NormalizeMarkers trims markers and falls back to defaults only when both lists
+// are omitted. Explicitly empty lists disable that marker type.
 func NormalizeMarkers(cfg MarkerConfig) MarkerConfig {
+	omitted := cfg.Prefixes == nil && cfg.Suffixes == nil
 	out := MarkerConfig{
 		Prefixes: normalizeList(cfg.Prefixes),
 		Suffixes: normalizeList(cfg.Suffixes),
 	}
-	if len(out.Prefixes) == 0 && len(out.Suffixes) == 0 {
+	if omitted {
 		return DefaultMarkers()
 	}
 	return out

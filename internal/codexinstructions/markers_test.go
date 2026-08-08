@@ -10,8 +10,6 @@ func TestParseModelDefaultMarkers(t *testing.T) {
 	}{
 		{"gpt-5.6-sol", "gpt-5.6-sol", false},
 		{"private/gpt-5.6-sol", "gpt-5.6-sol", true},
-		{"gpt-5.6-sol-private", "gpt-5.6-sol", true},
-		{"private/gpt-5.6-sol-private", "gpt-5.6-sol", true},
 		{"PRIVATE/gpt-5.6-sol", "PRIVATE/gpt-5.6-sol", false},
 	}
 	for _, tc := range cases {
@@ -19,6 +17,25 @@ func TestParseModelDefaultMarkers(t *testing.T) {
 		if got != tc.want || private != tc.private {
 			t.Fatalf("ParseModel(%q) = %q,%v want %q,%v", tc.in, got, private, tc.want, tc.private)
 		}
+	}
+}
+
+func TestParseModelExplicitlyEmptyMarkersDisableRouting(t *testing.T) {
+	markers := MarkerConfig{Prefixes: []string{}, Suffixes: []string{}}
+	if got, private := ParseModel("private/gpt-5.6-sol-private", markers); got != "private/gpt-5.6-sol-private" || private {
+		t.Fatalf("ParseModel with empty markers = %q,%v, want unchanged,false", got, private)
+	}
+}
+
+func TestParseModelCanDisableMarkerTypesIndependently(t *testing.T) {
+	prefixOnly := MarkerConfig{Prefixes: []string{"private/"}, Suffixes: []string{}}
+	if got, private := ParseModel("gpt-5.6-sol-private", prefixOnly); got != "gpt-5.6-sol-private" || private {
+		t.Fatalf("suffix with suffixes disabled = %q,%v, want unchanged,false", got, private)
+	}
+
+	suffixOnly := MarkerConfig{Prefixes: []string{}, Suffixes: []string{"-private"}}
+	if got, private := ParseModel("private/gpt-5.6-sol", suffixOnly); got != "private/gpt-5.6-sol" || private {
+		t.Fatalf("prefix with prefixes disabled = %q,%v, want unchanged,false", got, private)
 	}
 }
 
@@ -51,7 +68,7 @@ func TestModelMatches(t *testing.T) {
 
 func TestVirtualModelIDs(t *testing.T) {
 	ids := VirtualModelIDs("gpt-5.5", DefaultMarkers())
-	want := map[string]bool{"private/gpt-5.5": true, "gpt-5.5-private": true}
+	want := map[string]bool{"private/gpt-5.5": true}
 	if len(ids) != len(want) {
 		t.Fatalf("VirtualModelIDs len = %d (%v), want %d", len(ids), ids, len(want))
 	}
@@ -62,5 +79,9 @@ func TestVirtualModelIDs(t *testing.T) {
 	}
 	if got := VirtualModelIDs("private/gpt-5.5", DefaultMarkers()); len(got) != 0 {
 		t.Fatalf("already-private model should not expand, got %v", got)
+	}
+
+	if got := VirtualModelIDs("gpt-5.5", MarkerConfig{Prefixes: []string{}, Suffixes: []string{}}); len(got) != 0 {
+		t.Fatalf("empty markers should not expand, got %v", got)
 	}
 }

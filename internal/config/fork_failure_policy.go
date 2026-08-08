@@ -21,13 +21,13 @@ type CodexInstructionsConfig struct {
 	// Defaults to true when omitted. When false, every eligible Codex request uses private mode.
 	UsePrefixSuffix *bool `yaml:"use-prefix-suffix,omitempty" json:"use-prefix-suffix,omitempty"`
 	// RequestMarkers configures model prefixes/suffixes that enable private mode.
-	// Defaults to prefixes=["private/"] and suffixes=["-private"] when both empty.
+	// Omitted lists use the default prefix; explicitly empty lists disable that marker type.
 	RequestMarkers CodexInstructionMarkersConfig `yaml:"request-markers,omitempty" json:"request-markers,omitempty"`
 }
 
 type CodexInstructionMarkersConfig struct {
-	Prefixes []string `yaml:"prefixes,omitempty" json:"prefixes,omitempty"`
-	Suffixes []string `yaml:"suffixes,omitempty" json:"suffixes,omitempty"`
+	Prefixes []string `yaml:"prefixes" json:"prefixes"`
+	Suffixes []string `yaml:"suffixes" json:"suffixes"`
 }
 
 // CodexRoutingConfig configures account-tier-aware Codex credential selection.

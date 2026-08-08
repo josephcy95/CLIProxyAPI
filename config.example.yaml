@@ -325,8 +325,9 @@ codex:
     request-markers:
       prefixes:
         - "private/"
-      suffixes:
-        - "-private"
+      # Leave either list empty to disable that marker type. If both are empty
+      # while use-prefix-suffix is true, no model can opt in to private mode.
+      suffixes: []
     content: |
       Additional user preferences:
       - Default to Simplified Chinese unless the user asks otherwise.

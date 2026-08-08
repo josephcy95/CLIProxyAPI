@@ -92,7 +92,8 @@ codex:
     require-auth-allow: true
     reserve-marked-auths: false
     request-markers:
-      prefixes: []
+      prefixes:
+        - "private/"
       suffixes: []
     content: ""
 
