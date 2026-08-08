@@ -124,6 +124,12 @@ func TestParseConfigBytes_UsesBuiltinDefaults(t *testing.T) {
 	if cfg.XAI.OtherForbiddenCooldownHoursValue() != 6 {
 		t.Fatalf("xai other-403 cooldown = %d, want 6", cfg.XAI.OtherForbiddenCooldownHoursValue())
 	}
+	if cfg.RemoteManagement.PanelGitHubRepository != DefaultPanelGitHubRepository {
+		t.Fatalf("panel repository = %q, want %q", cfg.RemoteManagement.PanelGitHubRepository, DefaultPanelGitHubRepository)
+	}
+	if !strings.Contains(cfg.RemoteManagement.PanelGitHubRepository, "github.com/josephcy95/") {
+		t.Fatalf("panel repository must default to the fork, got %q", cfg.RemoteManagement.PanelGitHubRepository)
+	}
 }
 
 func TestBackfillMissingMappingKeys_Nested(t *testing.T) {
@@ -189,5 +195,8 @@ func TestLoadConfigOptional_OptionalCloudDoesNotWrite(t *testing.T) {
 	}
 	if cfg.Port != 8317 {
 		t.Fatalf("port = %d, want 8317", cfg.Port)
+	}
+	if cfg.RemoteManagement.PanelGitHubRepository != DefaultPanelGitHubRepository {
+		t.Fatalf("panel repository = %q, want %q", cfg.RemoteManagement.PanelGitHubRepository, DefaultPanelGitHubRepository)
 	}
 }

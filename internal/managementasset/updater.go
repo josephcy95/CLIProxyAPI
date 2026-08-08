@@ -27,7 +27,7 @@ import (
 
 const (
 	defaultManagementReleaseURL  = "https://api.github.com/repos/josephcy95/Cli-Proxy-API-Management-Center/releases/latest"
-	defaultManagementFallbackURL = "https://cpamc.router-for.me/"
+	defaultManagementFallbackURL = "https://github.com/josephcy95/Cli-Proxy-API-Management-Center/releases/latest/download/management.html"
 	managementAssetName          = "management.html"
 	httpUserAgent                = "CLIProxyAPI-management-updater"
 	managementSyncMinInterval    = 30 * time.Second
@@ -80,9 +80,9 @@ func runAutoUpdater(ctx context.Context) {
 	ticker := time.NewTicker(updateCheckInterval)
 	defer ticker.Stop()
 
-	runOnce := func() {
+	runOnce := func(respectAutoUpdateSetting bool) {
 		cfg := currentConfigPtr.Load()
-		if reason, skip := autoUpdateSkipReason(cfg); skip {
+		if reason, skip := managementUpdateSkipReason(cfg, respectAutoUpdateSetting); skip {
 			log.Debugf("management asset auto-updater skipped: %s", reason)
 			return
 		}
@@ -92,19 +92,24 @@ func runAutoUpdater(ctx context.Context) {
 		EnsureLatestManagementHTML(ctx, staticDir, cfg.ProxyURL, cfg.RemoteManagement.PanelGitHubRepository)
 	}
 
-	runOnce()
+	// Refresh once on every process start. If it fails, the existing cached file is preserved.
+	runOnce(false)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runOnce()
+			runOnce(true)
 		}
 	}
 }
 
 func autoUpdateSkipReason(cfg *config.Config) (string, bool) {
+	return managementUpdateSkipReason(cfg, true)
+}
+
+func managementUpdateSkipReason(cfg *config.Config, respectAutoUpdateSetting bool) (string, bool) {
 	if cfg == nil {
 		return "config not yet available", true
 	}
@@ -114,7 +119,7 @@ func autoUpdateSkipReason(cfg *config.Config) (string, bool) {
 	if cfg.RemoteManagement.DisableControlPanel {
 		return "control panel disabled", true
 	}
-	if cfg.RemoteManagement.DisableAutoUpdatePanel {
+	if respectAutoUpdateSetting && cfg.RemoteManagement.DisableAutoUpdatePanel {
 		return "disable-auto-update-panel is enabled", true
 	}
 	return "", false
@@ -224,7 +229,6 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 				log.WithError(errStat).Debug("failed to stat local management asset")
 			}
 		}
-
 		if errMkdirAll := os.MkdirAll(staticDir, 0o755); errMkdirAll != nil {
 			log.WithError(errMkdirAll).Warn("failed to prepare static directory for management asset")
 			return nil, nil
@@ -271,7 +275,6 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 			log.WithError(err).Warn("failed to download management asset")
 			return nil, nil
 		}
-
 		if remoteHash != "" && !strings.EqualFold(remoteHash, downloadedHash) {
 			log.Errorf("management asset digest mismatch: expected %s got %s — aborting update for safety", remoteHash, downloadedHash)
 			return nil, nil
@@ -296,7 +299,6 @@ func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, loca
 		log.WithError(err).Warn("failed to download fallback management control panel page")
 		return false
 	}
-
 	log.Warnf("management asset downloaded from fallback URL without digest verification (hash=%s) — "+
 		"enable verified GitHub updates by keeping disable-auto-update-panel set to false", downloadedHash)
 
@@ -311,7 +313,7 @@ func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, loca
 
 func resolveReleaseURL(repo string) string {
 	repo = strings.TrimSpace(repo)
-	if repo == "" {
+	if repo == "" || isLegacyUpstreamPanelRepository(repo) {
 		return defaultManagementReleaseURL
 	}
 
@@ -339,6 +341,20 @@ func resolveReleaseURL(repo string) string {
 	}
 
 	return defaultManagementReleaseURL
+}
+
+func isLegacyUpstreamPanelRepository(repo string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(repo))
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(parsed.Host)
+	path := strings.Trim(parsed.Path, "/")
+	path = strings.ToLower(strings.TrimSuffix(path, ".git"))
+	return (host == "github.com" && path == "router-for-me/cli-proxy-api-management-center") ||
+		(host == "api.github.com" && (path == "repos/router-for-me/cli-proxy-api-management-center" ||
+			path == "repos/router-for-me/cli-proxy-api-management-center/releases/latest"))
 }
 
 func fetchLatestAsset(ctx context.Context, client *http.Client, releaseURL string) (*releaseAsset, string, error) {

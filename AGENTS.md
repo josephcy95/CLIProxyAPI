@@ -15,6 +15,7 @@ Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex/Qoder compatible APIs
 This fork exists for **custom behavior**. Upstream is for bug fixes and additive features — not to erase fork-only logic.
 
 - Prefer a full merge of upstream release tags / `upstream/main` so the fork is not left “N commits behind”, but start it with `git merge --no-commit --no-ff upstream/<ref>`. Git applying a change cleanly does not authorize that change.
+- `--no-commit` still applies every clean upstream change to the index; it only pauses before creating the commit. Automatic merges require the same semantic review as textual conflicts.
 - Do not create the merge commit until every resulting API change has passed the fork-preservation gate below. After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
 
 ### API fork-preservation gate (mandatory before committing an upstream merge)
@@ -23,6 +24,17 @@ This fork exists for **custom behavior**. Upstream is for bug fixes and additive
 3. Existing fork behavior is the baseline. An upstream change to Codex backend calls, protocol translation, scheduling, provider wiring, configuration, management APIs, or storage may be integrated only when it preserves all currently working fork semantics and custom endpoints. If that cannot be proved, keep the fork behavior and ask the user rather than making a judgment call.
 4. Never wholesale accept an upstream version of a fork-owned function or file. Integrate the smallest necessary upstream behavior; preserve custom branches, registrations, filters, routes, call sites, configuration fields, and error handling.
 5. Before committing, run `gofmt`, the regression pins below, relevant focused tests for every changed behavior, `go test ./...`, and `go build -o test-output ./cmd/server && rm test-output`. For paths without automated coverage, trace the relevant end-to-end call path manually. A clean build is not sufficient proof.
+
+Mechanical release gate:
+- Explicitly read this file and `../AGENTS.md` before fetching or merging.
+- Record `PRE=$(git rev-parse HEAD)` and inspect the uncommitted result with `git diff --cached "$PRE"`. Never use `git diff "$PRE" HEAD` for this purpose because `HEAD` is still the pre-merge commit.
+- After resolving or combining changes, inspect `git status --short`, `git diff`, and `git diff --cached`. Stage the intended final result, then rerun `git diff --cached "$PRE"`; never review or commit the initial staged merge while fork corrections remain unstaged.
+- Maintain a complete path/function ledger: upstream behavior, fork ownership, retain/exclude/combine decision, and proof/test. No changed path or function may remain unclassified.
+- Before merging, identify files changed on both sides from the merge base; all are mandatory manual review even without conflicts.
+- More than 20 changed files, more than 500 changed lines, or any protected subsystem requires a second read-only staged-index audit before commit.
+- Do not pipe `go test` or `go build` through output filters. Release checks must preserve the actual command exit code.
+- Presence greps, ancestry, no deleted files, “0 behind,” compile success, and existing tests alone do not prove preservation.
+- Before commit, report exact changed-file/line counts and retain/exclude/combine counts. Any unproven behavior must use the fork implementation or be escalated to the user.
 
 If the gate finds a removed, changed, or unproven fork behavior, restore/combine the fork implementation before committing, or abort the merge. Never commit an unsafe merge expecting a later revert to repair it.
 
@@ -69,6 +81,7 @@ On conflicts: **keep fork features** by default; take upstream only for the narr
 - Distinct auth scheduler behavior (`auth_unavailable` when candidates exist)
 - Model context overrides (`model-context-overrides` management API + registry apply path)
 - Single data root (`CLIPROXY_DATA_DIR`, default `/data`): config/auths/logs/plugins/usage.db under one mount
+- Fork-owned management UI acquisition: `DefaultPanelGitHubRepository`, updater release/fallback URLs, stale upstream-default migration, and the cached/served `management.html` must resolve to `josephcy95/Cli-Proxy-API-Management-Center`
 - Primary Chinese README / fork README choices; do not reintroduce removed promo assets without ask
 
 ### Regression pins (keep these green)

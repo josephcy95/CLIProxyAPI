@@ -1,6 +1,7 @@
 package managementasset
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -58,5 +59,46 @@ func TestAutoUpdateSkipReason(t *testing.T) {
 				t.Fatalf("autoUpdateSkipReason() = (%q, %t), want (%q, %t)", gotReason, gotSkip, tt.wantReason, tt.wantSkip)
 			}
 		})
+	}
+}
+
+func TestManagementUpdateSkipReasonRefreshesAtStartup(t *testing.T) {
+	cfg := &config.Config{
+		RemoteManagement: config.RemoteManagement{DisableAutoUpdatePanel: true},
+	}
+	if reason, skip := managementUpdateSkipReason(cfg, false); skip {
+		t.Fatalf("startup refresh skipped: %s", reason)
+	}
+	if reason, skip := managementUpdateSkipReason(cfg, true); !skip || reason != "disable-auto-update-panel is enabled" {
+		t.Fatalf("periodic refresh = (%q, %t), want disabled", reason, skip)
+	}
+}
+
+func TestResolveReleaseURLKeepsManagementPanelOnFork(t *testing.T) {
+	tests := []struct {
+		name string
+		repo string
+	}{
+		{name: "empty", repo: ""},
+		{name: "fork default", repo: config.DefaultPanelGitHubRepository},
+		{name: "legacy upstream default", repo: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"},
+		{name: "legacy upstream default with slash", repo: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center/"},
+		{name: "legacy upstream git URL", repo: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center.git"},
+		{name: "legacy upstream git URL with slash", repo: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center.git/"},
+		{name: "legacy upstream API URL", repo: "https://api.github.com/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveReleaseURL(tt.repo); got != defaultManagementReleaseURL {
+				t.Fatalf("resolveReleaseURL(%q) = %q, want %q", tt.repo, got, defaultManagementReleaseURL)
+			}
+		})
+	}
+}
+
+func TestManagementFallbackURLIsForkOwned(t *testing.T) {
+	if !strings.Contains(defaultManagementFallbackURL, "github.com/josephcy95/Cli-Proxy-API-Management-Center/") {
+		t.Fatalf("management fallback must be fork-owned, got %q", defaultManagementFallbackURL)
 	}
 }
