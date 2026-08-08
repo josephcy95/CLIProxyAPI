@@ -872,6 +872,12 @@ func xaiStatusErr(code int, body []byte, cfg *config.Config) statusErr {
 	if len(body) == 0 {
 		return err
 	}
+	if code == http.StatusForbidden && isXAIBadCredentialsBody(body) {
+		// Upstream returns 403 for invalidated OAuth access tokens. Map to 401 so
+		// tryRefreshAfterUnauthorized / MarkResult unauthorized handling applies.
+		err.code = http.StatusUnauthorized
+		return err
+	}
 	if code != http.StatusTooManyRequests && code != http.StatusForbidden {
 		return err
 	}
@@ -940,4 +946,25 @@ func xaiTerminalStreamErr(eventData []byte, cfg *config.Config) (statusErr, bool
 		}
 	}
 	return xaiStatusErr(statusCode, eventData, cfg), true
+}
+
+// isXAIBadCredentialsBody reports whether an xAI error body indicates an
+// invalidated/unusable OAuth access token rather than a generic permission or
+// payment failure. HTTP and websocket payloads both use this helper, so nested
+// error.code / error.message shapes are checked as well as flat bodies.
+func isXAIBadCredentialsBody(body []byte) bool {
+	for _, path := range []string{"code", "error.code", "body.error.code"} {
+		if strings.Contains(strings.ToLower(gjson.GetBytes(body, path).String()), "bad-credentials") {
+			return true
+		}
+	}
+	for _, path := range []string{"error", "error.message", "message", "body.error", "body.error.message"} {
+		msg := strings.ToLower(gjson.GetBytes(body, path).String())
+		if strings.Contains(msg, "access token could not be validated") {
+			return true
+		}
+	}
+	raw := strings.ToLower(string(body))
+	return strings.Contains(raw, "bad-credentials") ||
+		strings.Contains(raw, "access token could not be validated")
 }

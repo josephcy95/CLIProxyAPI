@@ -347,6 +347,14 @@ func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
 }
 
 func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeModel string, now time.Time, preferFreeCodex bool) ([]*Auth, error) {
+	return m.availableAuthsForRouteModelWithPriorityMode(auths, provider, routeModel, now, false, preferFreeCodex)
+}
+
+func (m *Manager) availableAuthsForRouteModelAcrossPriorities(auths []*Auth, provider, routeModel string, now time.Time, preferFreeCodex bool) ([]*Auth, error) {
+	return m.availableAuthsForRouteModelWithPriorityMode(auths, provider, routeModel, now, true, preferFreeCodex)
+}
+
+func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, provider, routeModel string, now time.Time, allPriorities, preferFreeCodex bool) ([]*Auth, error) {
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}
 	}
@@ -396,20 +404,32 @@ func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeMode
 		availableByPriority = preferredByPriority
 	}
 
-	bestPriority := 0
-	found := false
-	for priority := range availableByPriority {
-		if !found || priority > bestPriority {
-			bestPriority = priority
-			found = true
+	return availableAuthsFromPriorityBuckets(availableByPriority, allPriorities), nil
+}
+
+// availableAuthsForSelector reports the candidates handed to priority-scoped consumers such as
+// the plugin scheduler, plus the candidates handed to the configured selector. Both are equal
+// unless session affinity is active, in which case the selector additionally receives lower
+// priority tiers so an established binding can be validated instead of being preempted by a
+// recovered higher-priority credential.
+func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, provider, routeModel string, now time.Time, preferFreeCodex bool) (priorityAuths, selectorAuths []*Auth, err error) {
+	if _, sessionAffinity := selector.(*SessionAffinitySelector); !sessionAffinity {
+		priorityAuths, err = m.availableAuthsForRouteModel(auths, provider, routeModel, now, preferFreeCodex)
+		if err != nil {
+			return nil, nil, err
 		}
+		priorityAuths = cloneAuthSlice(priorityAuths)
+		return priorityAuths, priorityAuths, nil
 	}
 
-	available := availableByPriority[bestPriority]
-	if len(available) > 1 {
-		sort.Slice(available, func(i, j int) bool { return available[i].ID < available[j].ID })
+	// One availability pass and one clone pass serve both lists: the highest priority tier is a
+	// subset of the across-priority candidates, so it is narrowed from the same cloned auths.
+	selectorAuths, err = m.availableAuthsForRouteModelAcrossPriorities(auths, provider, routeModel, now, preferFreeCodex)
+	if err != nil {
+		return nil, nil, err
 	}
-	return available, nil
+	selectorAuths = cloneAuthSlice(selectorAuths)
+	return highestPriorityAuths(selectorAuths), selectorAuths, nil
 }
 
 func selectionArgForSelector(selector Selector, routeModel string) string {
@@ -417,6 +437,17 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 		return ""
 	}
 	return routeModel
+}
+
+func restoreModelCooldownErrorModel(err error, requestedModel string) error {
+	if err == nil || requestedModel == "" {
+		return err
+	}
+	var cooldownErr *modelCooldownError
+	if !errors.As(err, &cooldownErr) || cooldownErr == nil || cooldownErr.model != "" {
+		return err
+	}
+	return newModelCooldownError(requestedModel, cooldownErr.provider, cooldownErr.resetIn)
 }
 
 func schedulerAttributeSensitive(key string) bool {
@@ -1082,12 +1113,11 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now(), eligibility.preferFreeCodexAuths)
+	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, provider, model, time.Now(), eligibility.preferFreeCodexAuths)
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		return nil, nil, errAvailable
 	}
-	available = cloneAuthSlice(available)
 	m.mu.RUnlock()
 
 	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available)
@@ -1096,8 +1126,11 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	}
 	if !handled {
 		selectorCtx := withWeightedSelectorStateModel(ctx, selector, model)
-		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), opts, available)
+		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), opts, selectorAuths)
 		if errPick != nil {
+			if isBuiltInSelector(selector) {
+				errPick = restoreModelCooldownErrorModel(errPick, model)
+			}
 			return nil, nil, errPick
 		}
 	}
@@ -1400,12 +1433,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now(), eligibility.preferFreeCodexAuths)
+	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, "mixed", model, time.Now(), eligibility.preferFreeCodexAuths)
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		return nil, nil, "", errAvailable
 	}
-	available = cloneAuthSlice(available)
 	m.mu.RUnlock()
 
 	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available)
@@ -1414,8 +1446,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	}
 	if !handled {
 		selectorCtx := withWeightedSelectorStateModel(ctx, selector, model)
-		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), opts, available)
+		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), opts, selectorAuths)
 		if errPick != nil {
+			if isBuiltInSelector(selector) {
+				errPick = restoreModelCooldownErrorModel(errPick, model)
+			}
 			return nil, nil, "", errPick
 		}
 	}
