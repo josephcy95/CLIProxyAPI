@@ -110,6 +110,7 @@ type Manager struct {
 	hook                      Hook
 	mu                        sync.RWMutex
 	configCooldownMu          sync.Mutex
+	authStateLocks            sync.Map
 	auths                     map[string]*Auth
 	scheduler                 *authScheduler
 	// pluginScheduler runs outside m.mu before falling back to native selection.

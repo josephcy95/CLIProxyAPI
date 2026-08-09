@@ -132,3 +132,51 @@ func TestResetQuota_DoesNotAcceptAuthIDOrFileName(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoverCodexQuota_RequiresObservedAtAndCodexAuth(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	next := time.Now().Add(time.Hour)
+	auth := &coreauth.Auth{
+		ID:       "recover-codex",
+		Provider: "codex",
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-5.6-sol": {
+				Status:         coreauth.StatusError,
+				StatusMessage:  "usage_limit_reached",
+				Unavailable:    true,
+				NextRetryAfter: next,
+				LastError:      &coreauth.Error{HTTPStatus: http.StatusTooManyRequests, Message: "usage_limit_reached"},
+				Quota:          coreauth.QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: next},
+				UpdatedAt:      time.Now().Add(-time.Minute),
+			},
+		},
+	}
+	authIndex := auth.EnsureIndex()
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, manager)
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/codex-quota-recovery", strings.NewReader(`{"auth_index":"`+authIndex+`"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	h.RecoverCodexQuota(ctx)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing observed_at status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(rec)
+	body := `{"auth_index":"` + authIndex + `","observed_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/codex-quota-recovery", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	h.RecoverCodexQuota(ctx)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recovery status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated, _ := manager.GetByID(auth.ID)
+	if state := updated.ModelStates["gpt-5.6-sol"]; state == nil || state.Unavailable || state.Quota.Exceeded {
+		t.Fatalf("usage-limit state not cleared: %+v", state)
+	}
+}

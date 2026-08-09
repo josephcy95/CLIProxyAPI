@@ -217,6 +217,108 @@ func TestManagerUpdateHydratesCodexPersistedRuntimeCooldown(t *testing.T) {
 	}
 }
 
+func TestManagerResetQuotaClearsPersistedRuntimeCooldown(t *testing.T) {
+	store := &capturingAuthStore{}
+	manager := NewManager(store, nil, nil)
+	auth := &Auth{
+		ID:       "reset-codex-runtime",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"type": "codex",
+			"runtime": map[string]any{
+				"models": map[string]any{
+					"gpt-5.6-sol": map[string]any{
+						"cooldown_until":   time.Now().Add(24 * time.Hour).Format(time.RFC3339Nano),
+						"reason":           "usage_limit_reached",
+						"http_status":      http.StatusTooManyRequests,
+						"usage_limit_hits": 1,
+					},
+				},
+			},
+		},
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	if _, _, err := manager.ResetQuota(context.Background(), auth.ID); err != nil {
+		t.Fatalf("reset quota: %v", err)
+	}
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("reset auth missing")
+	}
+	if _, exists := updated.Metadata["runtime"]; exists {
+		t.Fatalf("runtime metadata remains after reset: %#v", updated.Metadata["runtime"])
+	}
+	if saved := store.saved; saved == nil {
+		t.Fatal("reset did not persist auth")
+	} else if _, exists := saved.Metadata["runtime"]; exists {
+		t.Fatalf("persisted runtime metadata remains after reset: %#v", saved.Metadata["runtime"])
+	}
+}
+
+func TestManagerResetQuotaUsageLimitBeforePreservesNewerFailureAndAuthCounter(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	observedAt := time.Now()
+	oldRetry := observedAt.Add(time.Hour)
+	newRetry := observedAt.Add(2 * time.Hour)
+	auth := &Auth{
+		ID:       "recover-codex-guarded",
+		Provider: "codex",
+		ModelStates: map[string]*ModelState{
+			"old-model": {
+				Status:           StatusError,
+				StatusMessage:    "usage_limit_reached",
+				Unavailable:      true,
+				NextRetryAfter:   oldRetry,
+				LastError:        &Error{HTTPStatus: http.StatusTooManyRequests, Message: "usage_limit_reached"},
+				Quota:            QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: oldRetry},
+				UsageLimitCount:  2,
+				AuthFailureCount: 3,
+				UpdatedAt:        observedAt.Add(-time.Minute),
+			},
+			"new-model": {
+				Status:         StatusError,
+				StatusMessage:  "usage_limit_reached",
+				Unavailable:    true,
+				NextRetryAfter: newRetry,
+				LastError:      &Error{HTTPStatus: http.StatusTooManyRequests, Message: "usage_limit_reached"},
+				Quota:          QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: newRetry},
+				UpdatedAt:      observedAt.Add(time.Minute),
+			},
+		},
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	if _, models, err := manager.ResetQuotaUsageLimitBefore(context.Background(), auth.ID, observedAt); err != nil {
+		t.Fatalf("recover quota: %v", err)
+	} else if len(models) != 1 || models[0] != "old-model" {
+		t.Fatalf("cleared models = %v, want [old-model]", models)
+	}
+	updated, _ := manager.GetByID(auth.ID)
+	oldState := updated.ModelStates["old-model"]
+	if oldState.Unavailable || oldState.Quota.Exceeded || oldState.AuthFailureCount != 3 {
+		t.Fatalf("old state = %+v, want cooldown cleared and auth counter preserved", oldState)
+	}
+	newState := updated.ModelStates["new-model"]
+	if !newState.Unavailable || !newState.Quota.Exceeded {
+		t.Fatalf("newer state was cleared: %+v", newState)
+	}
+}
+
+type capturingAuthStore struct {
+	saved *Auth
+}
+
+func (s *capturingAuthStore) List(context.Context) ([]*Auth, error) { return nil, nil }
+func (s *capturingAuthStore) Delete(context.Context, string) error  { return nil }
+func (s *capturingAuthStore) Save(_ context.Context, auth *Auth) (string, error) {
+	s.saved = auth.Clone()
+	return "", nil
+}
+
 func TestManagerMaxRetryCredentialsZeroSkipsCooledAuthAfterReregistration(t *testing.T) {
 	manager := NewManager(nil, nil, nil)
 	manager.SetRetryConfig(0, 0, 0)

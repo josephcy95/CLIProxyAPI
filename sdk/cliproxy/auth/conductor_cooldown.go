@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -424,6 +425,26 @@ func dedupeStrings(values []string) []string {
 
 // ResetQuota clears quota/cooldown state for an auth and resumes registry routing.
 func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []string, error) {
+	return m.resetQuota(ctx, authID, false)
+}
+
+// ResetQuotaUsageLimit clears only Codex usage-limit cooldowns for an auth.
+// It is used after an official quota refresh proves that the account recovered.
+func (m *Manager) ResetQuotaUsageLimit(ctx context.Context, authID string) (*Auth, []string, error) {
+	return m.resetQuota(ctx, authID, true)
+}
+
+func (m *Manager) resetQuota(ctx context.Context, authID string, usageLimitOnly bool) (*Auth, []string, error) {
+	return m.resetQuotaBefore(ctx, authID, usageLimitOnly, time.Time{})
+}
+
+// ResetQuotaUsageLimitBefore clears usage-limit cooldowns that were recorded before observedAt.
+// It prevents an older quota refresh from clearing a newer request failure.
+func (m *Manager) ResetQuotaUsageLimitBefore(ctx context.Context, authID string, observedAt time.Time) (*Auth, []string, error) {
+	return m.resetQuotaBefore(ctx, authID, true, observedAt)
+}
+
+func (m *Manager) resetQuotaBefore(ctx context.Context, authID string, usageLimitOnly bool, observedAt time.Time) (*Auth, []string, error) {
 	if m == nil {
 		return nil, nil, nil
 	}
@@ -431,6 +452,9 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 	if authID == "" {
 		return nil, nil, fmt.Errorf("auth id is required")
 	}
+	stateLock := m.authStateLock(authID)
+	stateLock.Lock()
+	defer stateLock.Unlock()
 
 	now := time.Now()
 	var snapshot *Auth
@@ -444,6 +468,11 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		m.mu.Unlock()
 		return nil, nil, nil
 	}
+	if usageLimitOnly && !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("usage-limit recovery requires a codex auth")
+	}
+	original := auth.Clone()
 
 	var cooldownRecordsBefore []CooldownStateRecord
 	trackCooldownState := m.cooldownStore != nil
@@ -455,12 +484,26 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		if strings.TrimSpace(modelKey) == "" {
 			continue
 		}
+		if usageLimitOnly && !isCodexUsageLimitModelState(state) {
+			continue
+		}
+		if usageLimitOnly && !observedAt.IsZero() && state != nil && state.UpdatedAt.After(observedAt) {
+			continue
+		}
 		models = append(models, modelKey)
 		if state != nil {
-			resetModelState(state, now)
+			if usageLimitOnly {
+				resetCodexUsageLimitState(state, now)
+			} else {
+				resetModelState(state, now)
+			}
 		}
 	}
-	if clearCooldownStateForAuth(auth, now) {
+	if usageLimitOnly {
+		if len(models) > 0 {
+			updateAggregatedAvailability(auth, now)
+		}
+	} else if clearCooldownStateForAuth(auth, now) {
 		if len(models) == 0 {
 			models = append(models, registeredModels...)
 		}
@@ -468,7 +511,7 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		updateAggregatedAvailability(auth, now)
 	}
 
-	if len(models) == 0 {
+	if len(models) == 0 && !usageLimitOnly {
 		models = append(models, registeredModels...)
 	}
 	models = dedupeStrings(models)
@@ -477,6 +520,9 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		auth.LastError = nil
 		auth.StatusMessage = ""
 		auth.Status = StatusActive
+	}
+	if auth.Metadata != nil {
+		syncAuthRuntimeMetadata(auth, now)
 	}
 	auth.UpdatedAt = now
 	if errPersist := m.persist(ctx, auth); errPersist != nil {
@@ -491,16 +537,68 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 	m.mu.Unlock()
 
 	for _, modelKey := range models {
-		registry.GetGlobalRegistry().ClearModelQuotaExceeded(authID, modelKey)
-		registry.GetGlobalRegistry().ResumeClientModel(authID, modelKey)
+		canonicalModel := canonicalModelKey(modelKey)
+		if canonicalModel == "" {
+			continue
+		}
+		registry.GetGlobalRegistry().ClearModelQuotaExceeded(authID, canonicalModel)
+		registry.GetGlobalRegistry().ResumeClientModel(authID, canonicalModel)
 	}
 	if m.scheduler != nil && snapshot != nil {
 		m.scheduler.upsertAuth(snapshot)
 	}
-	if snapshot != nil && cooldownStateChanged {
-		m.persistCooldownStates(ctx)
+	if snapshot != nil && cooldownStateChanged && !m.persistCooldownStates(ctx) {
+		m.mu.Lock()
+		m.auths[authID] = original.Clone()
+		errPersist := m.persist(ctx, original)
+		m.mu.Unlock()
+		if m.scheduler != nil {
+			m.scheduler.upsertAuth(original)
+		}
+		for _, modelKey := range models {
+			canonicalModel := canonicalModelKey(modelKey)
+			state := original.ModelStates[modelKey]
+			if canonicalModel == "" || state == nil {
+				continue
+			}
+			if state.Quota.Exceeded {
+				registry.GetGlobalRegistry().SetModelQuotaExceeded(authID, canonicalModel)
+			}
+			if state.Unavailable || !state.NextRetryAfter.IsZero() {
+				registry.GetGlobalRegistry().SuspendClientModel(authID, canonicalModel, cooldownReason(state.StatusMessage, state.Quota, state.LastError))
+			}
+		}
+		if errPersist != nil {
+			return nil, nil, fmt.Errorf("failed to persist cooldown state and restore auth: %w", errPersist)
+		}
+		return nil, nil, fmt.Errorf("failed to persist cooldown state")
 	}
 	return snapshot, models, nil
+}
+
+func (m *Manager) authStateLock(authID string) *sync.Mutex {
+	lock, _ := m.authStateLocks.LoadOrStore(authID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func isCodexUsageLimitModelState(state *ModelState) bool {
+	if state == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(state.StatusMessage), "usage_limit_reached") ||
+		strings.Contains(strings.ToLower(state.StatusMessage), "usage limit") {
+		return true
+	}
+	if state.LastError == nil {
+		return false
+	}
+	return isCodexUsageLimitErrorMessage(state.LastError)
+}
+
+func resetCodexUsageLimitState(state *ModelState, now time.Time) {
+	authFailureCount := state.AuthFailureCount
+	resetModelState(state, now)
+	state.AuthFailureCount = authFailureCount
 }
 
 func modelsForRegisteredAuth(authID string) []string {
@@ -515,26 +613,28 @@ func modelsForRegisteredAuth(authID string) []string {
 	return models
 }
 
-func (m *Manager) persistCooldownStates(ctx context.Context) {
+func (m *Manager) persistCooldownStates(ctx context.Context) bool {
 	if m == nil {
-		return
+		return true
 	}
 	m.configCooldownMu.Lock()
 	defer m.configCooldownMu.Unlock()
-	m.persistCooldownStatesLocked(ctx)
+	return m.persistCooldownStatesLocked(ctx)
 }
 
-func (m *Manager) persistCooldownStatesLocked(ctx context.Context) {
+func (m *Manager) persistCooldownStatesLocked(ctx context.Context) bool {
 	m.mu.RLock()
 	store := m.cooldownStore
 	m.mu.RUnlock()
-	if m.persistCooldownStatesToLocked(ctx, store) {
+	ok := m.persistCooldownStatesToLocked(ctx, store)
+	if ok {
 		m.mu.Lock()
 		if m.pendingCooldownStateStore == store {
 			m.pendingCooldownStateStore = nil
 		}
 		m.mu.Unlock()
 	}
+	return ok
 }
 
 func (m *Manager) persistCooldownStatesToLocked(ctx context.Context, store CooldownStateStore) bool {
@@ -700,6 +800,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		return
 	}
 	modelKey := canonicalModelKey(result.Model)
+	stateLock := m.authStateLock(result.AuthID)
+	stateLock.Lock()
 
 	shouldResumeModel := false
 	shouldSuspendModel := false
@@ -929,6 +1031,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			logEntryWithRequestID(ctx).WithField("auth_id", authSnapshot.ID).Warnf("failed to persist auth result: %v", errPersist)
 		}
 	}
+	stateLock.Unlock()
 
 	m.hook.OnResult(ctx, result)
 	m.publishErrorEvent(result, authSnapshot)
