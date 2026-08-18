@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/google/uuid"
@@ -23,6 +24,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
@@ -261,6 +263,23 @@ func (claudeEntitlementError) IsRequestScoped() bool {
 	return true
 }
 
+func (claudeEntitlementError) IsCredentialScoped() bool {
+	return false
+}
+
+type claudeRateLimitError struct {
+	statusErr
+	credentialScoped bool
+}
+
+func (e claudeRateLimitError) IsCredentialScoped() bool {
+	return e.credentialScoped
+}
+
+func (e claudeRateLimitError) IsRequestScoped() bool {
+	return false
+}
+
 // classifyClaudeUpstreamError promotes upstream refusals that no other credential
 // can satisfy into request-scoped errors.
 //
@@ -271,22 +290,24 @@ func (claudeEntitlementError) IsRequestScoped() bool {
 // next one, which returns the same 429. A single speed:"fast" request would walk
 // the whole Claude pool and cool down every credential, all of which remain
 // perfectly healthy for ordinary traffic. The refusal belongs to the request.
-func classifyClaudeUpstreamError(statusCode int, body []byte) error {
-	return classifyClaudeUpstreamStatusError(statusErr{code: statusCode, msg: string(body)}, body)
-}
-
-func classifyClaudeUpstreamResponseError(statusCode int, header http.Header, body []byte) error {
-	err := statusErr{
-		code:       statusCode,
-		msg:        string(body),
-		retryAfter: claudeRetryAfterFromResponse(header, body),
+func classifyClaudeUpstreamError(statusCode int, headers http.Header, body []byte) error {
+	var retryAfter *time.Duration
+	if statusCode == http.StatusTooManyRequests || (statusCode >= 400 && statusCode < 600) {
+		retryAfter = helps.ParseClaudeRateLimitReset(headers, time.Now())
 	}
-	return classifyClaudeUpstreamStatusError(err, body)
-}
-
-func classifyClaudeUpstreamStatusError(err statusErr, body []byte) error {
-	if err.code == http.StatusTooManyRequests && claudeBodyIndicatesFastModeCredits(body) {
-		return claudeEntitlementError{err}
+	if retryAfter == nil {
+		retryAfter = claudeRetryAfterFromResponse(headers, body)
+	}
+	err := statusErr{code: statusCode, msg: string(body), retryAfter: retryAfter}
+	if statusCode == http.StatusTooManyRequests {
+		if helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(headers) {
+			return claudeRateLimitError{statusErr: err, credentialScoped: true}
+		}
+		if claudeBodyIndicatesFastModeCredits(body) {
+			return claudeEntitlementError{err}
+		}
+		// Ordinary model-level Claude 429 (not a unified 5h/7d rejection)
+		return claudeRateLimitError{statusErr: err, credentialScoped: false}
 	}
 	return err
 }
@@ -298,8 +319,9 @@ func claudeBodyIndicatesFastModeCredits(body []byte) bool {
 	if message == "" {
 		message = strings.ToLower(string(body))
 	}
-	return strings.Contains(message, "fast mode") &&
-		(strings.Contains(message, "usage credits") || strings.Contains(message, "credits are required"))
+	return strings.Contains(message, "fast request rejected") ||
+		(strings.Contains(message, "fast") &&
+			(strings.Contains(message, "usage credits") || strings.Contains(message, "credits are required")))
 }
 
 // claudeRequestedBetas collects every beta the caller asked for, from the
@@ -381,15 +403,49 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 }
 
 // normalizeClaudeSamplingForUpstream keeps Anthropic message requests valid.
-func normalizeClaudeSamplingForUpstream(body []byte) []byte {
-	body, _ = sjson.DeleteBytes(body, "temperature")
-	body, _ = sjson.DeleteBytes(body, "top_p")
-
-	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
-	switch thinkingType {
+//
+// Translated and cloaked callers keep the conservative normalization: their
+// sampling knobs come from a protocol that was not written for Anthropic, and
+// Anthropic rejects several combinations outright, so neither temperature nor
+// top_p is worth forwarding.
+//
+// A confirmed native Claude Code client owns its own wire, exactly like
+// cache_control placement. The measured structured Haiku helper sends
+// "temperature":1 and claudeCodeHelperShapeStructured keys on it, so stripping
+// it would emit a shape no native client ever produces. Keep what the caller
+// sent and drop only what Anthropic actually rejects (verified live):
+//   - thinking active: temperature must be 1, top_p must be >= 0.95, top_k unset
+//   - otherwise: temperature and top_p cannot both be specified
+func normalizeClaudeSamplingForUpstream(body []byte, nativeOwned bool) []byte {
+	thinkingActive := false
+	switch strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String())) {
 	case "enabled", "adaptive", "auto":
+		thinkingActive = true
+	}
+
+	if !nativeOwned {
+		body, _ = sjson.DeleteBytes(body, "temperature")
 		body, _ = sjson.DeleteBytes(body, "top_p")
+		if thinkingActive {
+			body, _ = sjson.DeleteBytes(body, "top_k")
+		}
+		return body
+	}
+
+	if thinkingActive {
+		if temperature := gjson.GetBytes(body, "temperature"); temperature.Exists() && temperature.Num != 1 {
+			body, _ = sjson.DeleteBytes(body, "temperature")
+		}
+		if topP := gjson.GetBytes(body, "top_p"); topP.Exists() && topP.Num < 0.95 {
+			body, _ = sjson.DeleteBytes(body, "top_p")
+		}
 		body, _ = sjson.DeleteBytes(body, "top_k")
+		return body
+	}
+	// Anthropic accepts either one but not both; temperature is the knob native
+	// Claude Code actually sends, so top_p is the one that gives way.
+	if gjson.GetBytes(body, "temperature").Exists() && gjson.GetBytes(body, "top_p").Exists() {
+		body, _ = sjson.DeleteBytes(body, "top_p")
 	}
 	return body
 }
@@ -552,7 +608,43 @@ func isZlibHeader(header []byte) bool {
 	return cmf&0x0f == 8 && cmf>>4 <= 7 && (uint16(cmf)<<8|uint16(flg))%31 == 0
 }
 
+// claudeCredentialUsesOAuth classifies the selected upstream credential. It is the
+// single authority for every decision that has to agree with the OAuth beta
+// profile, including the extended-cache-ttl beta and the matching body cache ttl.
+func claudeCredentialUsesOAuth(auth *cliproxyauth.Auth, apiKey string) bool {
+	hasAPIKeyAttr := auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""
+	return isClaudeOAuthToken(apiKey) || !hasAPIKeyAttr
+}
+
 func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool, extraBetas []string, body []byte, cfg *config.Config, incomingHeaders http.Header, confirmedClaudeCode bool, sessionIDs ...string) error {
+	return applyClaudeHeadersWithNativeProfile(
+		r,
+		auth,
+		apiKey,
+		stream,
+		extraBetas,
+		body,
+		cfg,
+		incomingHeaders,
+		confirmedClaudeCode,
+		false,
+		sessionIDs...,
+	)
+}
+
+func applyClaudeHeadersWithNativeProfile(
+	r *http.Request,
+	auth *cliproxyauth.Auth,
+	apiKey string,
+	stream bool,
+	extraBetas []string,
+	body []byte,
+	cfg *config.Config,
+	incomingHeaders http.Header,
+	confirmedClaudeCode bool,
+	helperProfile bool,
+	sessionIDs ...string,
+) error {
 	if r == nil {
 		return nil
 	}
@@ -568,8 +660,7 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 		hd = cfg.ClaudeHeaderDefaults
 	}
 
-	hasAPIKeyAttr := auth != nil && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != ""
-	oauthToken := isClaudeOAuthToken(apiKey) || !hasAPIKeyAttr
+	oauthToken := claudeCredentialUsesOAuth(auth, apiKey)
 	useAPIKey := !oauthToken
 	isAnthropicBase := isAnthropicUpstreamURL(r.URL)
 	if isAnthropicBase && useAPIKey {
@@ -603,7 +694,9 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	}
 	if confirmedClaudeCode && incomingBetas != "" {
 		baseBetas = incomingBetas
-		if oauthToken {
+		// Measured Haiku helper requests already carry the exact credential
+		// beta profile and intentionally omit extended-cache-ttl.
+		if oauthToken && !helperProfile {
 			if countTokens {
 				baseBetas = withClaudeCountTokensOAuthBeta(baseBetas)
 			} else {
@@ -662,6 +755,11 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	identityHeader("X-Stainless-Retry-Count", "0")
 	identityHeader("X-Stainless-Runtime", "node")
 	identityHeader("X-Stainless-Lang", "js")
+	// Native async SDK helpers add this header independently of body.stream.
+	// Preserve it only after the complete native-client detector succeeds.
+	if confirmedClaudeCode && incomingHeaders.Get("X-Stainless-Async") == "async" {
+		r.Header.Set("X-Stainless-Async", "async")
+	}
 	// Claude Code omits X-Stainless-Timeout on count_tokens; only a confirmed
 	// native client that sent one of its own keeps it there.
 	if !countTokens {
@@ -692,18 +790,24 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 		identityHeader("X-Claude-Code-Session-Id", sessionID)
 	}
 	// Per-request UUID, matches Claude Code's x-client-request-id for first-party API.
-	if isAnthropicBase {
+	// identityHeader prefers the incoming value for a confirmed client, so a confirmed
+	// helper keeps its own native request ID and this fresh UUID only covers a caller
+	// that sent none. Helpers opt in on custom gateways too.
+	if isAnthropicBase || helperProfile {
 		identityHeader("x-client-request-id", uuid.New().String())
 	}
 	r.Header.Set("Connection", "keep-alive")
-	// Claude Code negotiates transport identically for streaming and non-streaming
-	// requests: Accept stays application/json and full compression is offered even
-	// when the body sets stream:true, because Anthropic selects SSE from the body
-	// rather than from Accept. Verified across every captured 2.1.220 stream.
-	// Forcing text/event-stream plus identity here would otherwise mark every
-	// streaming request, which is nearly all traffic. decodeResponseBody already
-	// wraps the success path, so a compressed SSE body is decoded transparently.
+	// Regular Claude Code requests negotiate transport identically for streaming
+	// and non-streaming requests. Measured Haiku helpers are the exception: their
+	// minimal non-stream request offers gzip only, while the structured streaming
+	// helper offers the full compression set. Confirmed helpers preserve the
+	// incoming native values.
 	applyTransportNegotiation := func() {
+		if helperProfile {
+			identityHeader("Accept", "application/json")
+			identityHeader("Accept-Encoding", "gzip")
+			return
+		}
 		if stream && !isAnthropicBase {
 			// Other Anthropic-compatible upstreams (Kimi, custom gateways) may select
 			// SSE from Accept and need not compress predictably, so they keep the
@@ -816,6 +920,24 @@ func claudeCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
 		apiKey = claudeauth.ReadMetadataString(&a.Metadata, "access_token")
 	}
 	return
+}
+
+// claudePayloadHasMidSystemMessage reports whether the caller placed a
+// {"role":"system"} turn inside messages.
+func claudePayloadHasMidSystemMessage(payload []byte) bool {
+	messages := gjson.GetBytes(payload, "messages")
+	if !messages.IsArray() {
+		return false
+	}
+	found := false
+	messages.ForEach(func(_, message gjson.Result) bool {
+		if strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "system") {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func rebuildMidSystemMessagesToTopLevel(payload []byte) []byte {
@@ -1001,28 +1123,32 @@ func remapOAuthToolNamesWithBatchedEdits(body []byte, mcpAliases claudeMCPAliasO
 			}
 			return true
 		})
+		passthroughMCPTools := make([]string, 0, 4)
 		tools.ForEach(func(_, tool gjson.Result) bool {
 			if helps.IsClaudeServerToolType(tool.Get("type").String()) {
 				return true
 			}
 			name := tool.Get("name").String()
-			if name == "" || helps.IsClaudeMCPToolName(name) {
+			if name == "" {
+				return true
+			}
+			if helps.IsClaudeMCPToolName(name) {
+				passthroughMCPTools = append(passthroughMCPTools, name)
 				return true
 			}
 			if _, exists := forwardMap[name]; exists {
 				return true
 			}
-			for attempt := uint32(0); ; attempt++ {
-				alias := helps.ClaudeMCPToolAlias(mcpAliases.secret, name, attempt)
-				if reservedNames[alias] {
-					continue
-				}
-				forwardMap[name] = alias
-				reservedNames[alias] = true
-				break
+			alias, allocated := helps.AllocateClaudeMCPToolAlias(mcpAliases.secret, name, reservedNames)
+			if !allocated {
+				log.Warnf("claude oauth mcp alias: no free alias left for tool %q, forwarding the original name", name)
+				return true
 			}
+			forwardMap[name] = alias
+			reservedNames[alias] = true
 			return true
 		})
+		recordPassthroughMCPTools(recordRename, forwardMap, passthroughMCPTools)
 	}
 
 	rewriteName := func(name string) (string, bool) {
@@ -1046,7 +1172,7 @@ func remapOAuthToolNamesWithBatchedEdits(body []byte, mcpAliases claudeMCPAliasO
 		return true
 	}
 	appendStringEdit := func(result gjson.Result, replacement string) bool {
-		// ClaudeMCPToolAlias only emits [A-Za-z0-9_-], so adding quotes is
+		// Generated aliases only emit [A-Za-z0-9_-], so adding quotes is
 		// byte-identical to sjson's encoding without another allocation.
 		return appendRawEdit(result, `"`+replacement+`"`)
 	}
@@ -1255,28 +1381,32 @@ func remapOAuthToolNamesWithOptionsLegacy(body []byte, mcpAliases claudeMCPAlias
 			}
 			return true
 		})
+		passthroughMCPTools := make([]string, 0, 4)
 		tools.ForEach(func(_, tool gjson.Result) bool {
 			if helps.IsClaudeServerToolType(tool.Get("type").String()) {
 				return true
 			}
 			name := tool.Get("name").String()
-			if name == "" || helps.IsClaudeMCPToolName(name) {
+			if name == "" {
+				return true
+			}
+			if helps.IsClaudeMCPToolName(name) {
+				passthroughMCPTools = append(passthroughMCPTools, name)
 				return true
 			}
 			if _, exists := forwardMap[name]; exists {
 				return true
 			}
-			for attempt := uint32(0); ; attempt++ {
-				alias := helps.ClaudeMCPToolAlias(mcpAliases.secret, name, attempt)
-				if reservedNames[alias] {
-					continue
-				}
-				forwardMap[name] = alias
-				reservedNames[alias] = true
-				break
+			alias, allocated := helps.AllocateClaudeMCPToolAlias(mcpAliases.secret, name, reservedNames)
+			if !allocated {
+				log.Warnf("claude oauth mcp alias: no free alias left for tool %q, forwarding the original name", name)
+				return true
 			}
+			forwardMap[name] = alias
+			reservedNames[alias] = true
 			return true
 		})
+		recordPassthroughMCPTools(recordRename, forwardMap, passthroughMCPTools)
 	}
 
 	rewriteName := func(name string) (string, bool) {
@@ -1434,6 +1564,11 @@ func newClaudeMCPAliasResolver(reverseMap map[string]string) claudeMCPAliasResol
 		servers: make(map[string]struct{}),
 	}
 	for alias, original := range reverseMap {
+		if alias == original {
+			// Caller-owned MCP tool recorded for exact passthrough only. It must not
+			// register a virtual server or take part in fuzzy alias recovery.
+			continue
+		}
 		parts, ok := parseClaudeMCPAlias(alias)
 		if !ok {
 			continue
@@ -1449,31 +1584,22 @@ func newClaudeMCPAliasResolver(reverseMap map[string]string) claudeMCPAliasResol
 }
 
 func parseClaudeMCPAlias(name string) (claudeMCPAliasParts, bool) {
+	if !helps.IsClaudeMCPToolName(name) {
+		return claudeMCPAliasParts{}, false
+	}
 	rest, ok := strings.CutPrefix(name, "mcp__")
 	if !ok {
 		return claudeMCPAliasParts{}, false
 	}
 	server, tool, ok := strings.Cut(rest, "__")
-	if !ok || !isClaudeMCPAliasDigest(server) {
+	if !ok || server == "" {
 		return claudeMCPAliasParts{}, false
 	}
 	toolID, semantic, ok := strings.Cut(tool, "_")
-	if !ok || !isClaudeMCPAliasDigest(toolID) || semantic == "" {
+	if !ok || toolID == "" || semantic == "" {
 		return claudeMCPAliasParts{}, false
 	}
 	return claudeMCPAliasParts{server: server, toolID: toolID, semantic: semantic}, true
-}
-
-func isClaudeMCPAliasDigest(value string) bool {
-	if len(value) != 12 {
-		return false
-	}
-	for _, char := range value {
-		if (char < 'a' || char > 'z') && (char < '2' || char > '7') {
-			return false
-		}
-	}
-	return true
 }
 
 func claudeMCPAliasServer(name string) string {
@@ -1488,14 +1614,48 @@ func claudeMCPAliasServer(name string) string {
 	return server
 }
 
+// recordPassthroughMCPTools remembers caller-owned MCP tool names that were left
+// untouched. Without this the response resolver would treat such a name as a
+// drifted alias whenever the derived two-word virtual server happens to equal a
+// real MCP server name, and would either restore the wrong tool or fail the
+// request. Recording is skipped when nothing was aliased so an untouched request
+// keeps an empty reverse map and the restore path stays a no-op.
+func recordPassthroughMCPTools(recordRename func(original, renamed string), forwardMap map[string]string, passthrough []string) {
+	if len(forwardMap) == 0 {
+		return
+	}
+	for _, name := range passthrough {
+		recordRename(name, name)
+	}
+}
+
 func (resolver claudeMCPAliasResolver) resolve(name string) (string, bool, error) {
 	if original, ok := resolver.exact[name]; ok {
+		if original == name {
+			// Caller-owned MCP tool: forward it exactly as the client declared it.
+			return "", false, nil
+		}
 		return original, true, nil
 	}
 
 	server := claudeMCPAliasServer(name)
 	if _, known := resolver.servers[server]; !known {
 		return "", false, nil
+	}
+
+	canonicalServerPrefix := "mcp__" + server + "__"
+	normalizedName := name
+	suffix := strings.TrimPrefix(name, canonicalServerPrefix)
+	for {
+		strippedSuffix, repeatedServer := strings.CutPrefix(suffix, server+"__")
+		if !repeatedServer {
+			break
+		}
+		suffix = strippedSuffix
+		normalizedName = canonicalServerPrefix + suffix
+		if original, exact := resolver.exact[normalizedName]; exact {
+			return original, true, nil
+		}
 	}
 
 	matchedOriginal := ""
@@ -1513,20 +1673,59 @@ func (resolver claudeMCPAliasResolver) resolve(name string) (string, bool, error
 		return "", false, fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: matched multiple declared aliases", name)
 	}
 
-	parts, ok := parseClaudeMCPAlias(name)
-	if ok {
+	parts, validAlias := parseClaudeMCPAlias(normalizedName)
+	if validAlias {
 		for _, entry := range resolver.aliases {
 			if entry.parts.server == parts.server && entry.parts.semantic == parts.semantic {
 				matchedOriginal = entry.original
 				matchCount++
 			}
 		}
+	}
+	// Extra words in the tool component still parse, but the semantic field
+	// is then wrong. Fall through to an unambiguous suffix match so word-level
+	// repeats do not become restore 500s.
+	if matchCount == 0 {
+		var suffixMatches []claudeMCPAliasEntry
+		for _, entry := range resolver.aliases {
+			if entry.parts.server == server && strings.HasSuffix(normalizedName, "_"+entry.parts.semantic) {
+				suffixMatches = append(suffixMatches, entry)
+			}
+		}
+		if len(suffixMatches) == 1 {
+			matchedOriginal = suffixMatches[0].original
+			matchCount = 1
+		} else if len(suffixMatches) > 1 {
+			// If multiple candidates match (e.g. "_file" and "_read_file"),
+			// choose the strictly longest semantic match when unambiguous.
+			longest := suffixMatches[0]
+			tie := false
+			for _, candidate := range suffixMatches[1:] {
+				if len(candidate.parts.semantic) > len(longest.parts.semantic) {
+					longest = candidate
+					tie = false
+				} else if len(candidate.parts.semantic) == len(longest.parts.semantic) {
+					tie = true
+				}
+			}
+			if !tie {
+				matchedOriginal = longest.original
+				matchCount = 1
+			} else {
+				matchCount = len(suffixMatches)
+			}
+		}
 		if matchCount == 1 {
-			return matchedOriginal, true, nil
+			// This path guesses instead of failing, so leave a trace: it is the only
+			// way to tell a silent wrong-tool restore from a healthy request.
+			log.Debugf("claude oauth mcp alias: recovered drifted tool name %q as %q via semantic suffix", name, matchedOriginal)
 		}
-		if matchCount > 1 {
-			return "", false, fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: semantic suffix matches multiple declared tools", name)
-		}
+	}
+	if matchCount == 1 {
+		return matchedOriginal, true, nil
+	}
+	if matchCount > 1 {
+		return "", false, fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: semantic suffix matches multiple declared tools", name)
 	}
 
 	return "", false, fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: no unique request-local match", name)

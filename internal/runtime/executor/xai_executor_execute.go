@@ -109,6 +109,9 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 			cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, completedData)
 			var param any
 			out := sdktranslator.TranslateNonStream(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, completedData, &param)
+			if prepared.responseFormat == sdktranslator.FormatOpenAIResponse {
+				out = helps.EnsureResponsesUsageDetails(out)
+			}
 			return cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}, nil
 		}
 	}
@@ -124,6 +127,9 @@ func (e *XAIExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Aut
 
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, data, &param)
+	if prepared.responseFormat == sdktranslator.FormatOpenAIResponse {
+		out = helps.EnsureResponsesUsageDetails(out)
+	}
 	return cliproxyexecutor.Response{Payload: out, Headers: headers}, nil
 }
 
@@ -306,6 +312,7 @@ func xaiBuildCompactionTriggerStreamChunks(prepared *xaiPreparedRequest, compact
 	donePayload, _ = sjson.SetRawBytes(donePayload, "item", item)
 	completedPayload := []byte(`{"type":"response.completed","sequence_number":5}`)
 	completedPayload, _ = sjson.SetRawBytes(completedPayload, "response", completedResponse)
+	completedPayload = helps.EnsureResponsesUsageDetails(completedPayload)
 
 	return [][]byte{
 		xaiBuildSSEFrame("response.created", createdPayload),

@@ -135,6 +135,14 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	auth.recentRequests = existing.recentRequests
 	if !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {
 		auth.ModelStates = mergeModelStatesConservatively(existing.ModelStates, auth.ModelStates, now)
+		if existing.Quota.Exceeded && existing.Quota.Reason == "credential_quota" && existing.Quota.NextRecoverAt.After(now) {
+			auth.Unavailable = existing.Unavailable
+			auth.NextRetryAfter = existing.NextRetryAfter
+			auth.Quota = existing.Quota
+			if auth.Status == StatusActive {
+				auth.Status = existing.Status
+			}
+		}
 	}
 	cooldownStateChanged := normalizeModelStates(auth)
 	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
