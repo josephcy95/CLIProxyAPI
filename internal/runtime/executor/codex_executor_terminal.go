@@ -192,7 +192,14 @@ func codexTerminalFailureBody(eventData []byte) ([]byte, bool) {
 			body = codexTerminalErrorBody(eventData, "error")
 		}
 	default:
-		return nil, false
+		// The Codex websocket can send a bare {"error": ...} payload before
+		// emitting a response event. Treat it as a bootstrap failure so the
+		// conductor can fail over before anything reaches the client.
+		if gjson.GetBytes(eventData, "error").Exists() {
+			body = codexTerminalErrorBody(eventData, "error")
+		} else {
+			return nil, false
+		}
 	}
 	if len(body) == 0 {
 		body = []byte(`{"error":{"message":"upstream stream failed without error details"}}`)
