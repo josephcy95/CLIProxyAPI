@@ -175,13 +175,14 @@ func (e *credentialRetryLimitExecutor) Calls() int {
 type authFallbackExecutor struct {
 	id string
 
-	mu                sync.Mutex
-	executeCalls      []string
-	streamCalls       []string
-	executeErrors     map[string]error
-	streamFirstErrors map[string]error
-	streamTailErrors  map[string]error
-	countTokenErrors  map[string]error
+	mu                  sync.Mutex
+	executeCalls        []string
+	streamCalls         []string
+	executeErrors       map[string]error
+	streamFirstErrors   map[string]error
+	streamFirstPayloads map[string][]byte
+	streamTailErrors    map[string]error
+	countTokenErrors    map[string]error
 }
 
 func (e *authFallbackExecutor) Identifier() string {
@@ -203,6 +204,7 @@ func (e *authFallbackExecutor) ExecuteStream(_ context.Context, auth *Auth, _ cl
 	e.mu.Lock()
 	e.streamCalls = append(e.streamCalls, auth.ID)
 	firstErr := e.streamFirstErrors[auth.ID]
+	firstPayload := e.streamFirstPayloads[auth.ID]
 	tailErr := e.streamTailErrors[auth.ID]
 	e.mu.Unlock()
 
@@ -212,7 +214,11 @@ func (e *authFallbackExecutor) ExecuteStream(_ context.Context, auth *Auth, _ cl
 		close(ch)
 		return &cliproxyexecutor.StreamResult{Headers: http.Header{"X-Auth": {auth.ID}}, Chunks: ch}, nil
 	}
-	ch <- cliproxyexecutor.StreamChunk{Payload: []byte(auth.ID)}
+	if firstPayload != nil {
+		ch <- cliproxyexecutor.StreamChunk{Payload: firstPayload}
+	} else {
+		ch <- cliproxyexecutor.StreamChunk{Payload: []byte(auth.ID)}
+	}
 	if tailErr != nil {
 		ch <- cliproxyexecutor.StreamChunk{Err: tailErr}
 	}
@@ -406,6 +412,68 @@ func TestManager_MaxRetryCredentials_LimitsCrossCredentialRetries(t *testing.T) 
 				t.Fatalf("expected 2 calls with max-retry-credentials=0, got %d", calls)
 			}
 		})
+	}
+}
+
+func TestManagerExecuteStream_BareOverloadPayloadWithUnlimitedCredentialsTriesAll(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	// Zero is unlimited: every eligible credential must be attempted.
+	m.SetRetryConfig(0, 0, 0)
+	const model = "gpt-5"
+	overloaded := []byte(`{"error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later.","param":null}}`)
+	auths := []*Auth{
+		{ID: "aa-overloaded-auth", Provider: "codex"},
+		{ID: "ab-overloaded-auth", Provider: "codex"},
+		{ID: "ac-overloaded-auth", Provider: "codex"},
+		{ID: "zz-healthy-auth", Provider: "codex"},
+	}
+	executor := &authFallbackExecutor{
+		id: "codex",
+		streamFirstPayloads: map[string][]byte{
+			auths[0].ID: overloaded,
+			auths[1].ID: overloaded,
+			auths[2].ID: overloaded,
+		},
+	}
+	m.RegisterExecutor(executor)
+
+	reg := registry.GetGlobalRegistry()
+	for _, auth := range auths {
+		reg.RegisterClient(auth.ID, "codex", []*registry.ModelInfo{{ID: model}})
+		if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+			t.Fatalf("register %s: %v", auth.ID, errRegister)
+		}
+	}
+	t.Cleanup(func() {
+		for _, auth := range auths {
+			reg.UnregisterClient(auth.ID)
+		}
+	})
+
+	streamResult, errExecute := m.ExecuteStream(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("execute stream error = %v, want success", errExecute)
+	}
+	var payload []byte
+	for chunk := range streamResult.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("stream chunk error = %v, want success", chunk.Err)
+		}
+		payload = append(payload, chunk.Payload...)
+	}
+	if got := string(payload); got != auths[3].ID {
+		t.Fatalf("stream payload = %q, want fourth credential %q", got, auths[3].ID)
+	}
+	calls := executor.StreamCalls()
+	if len(calls) != len(auths) || calls[len(calls)-1] != auths[3].ID {
+		t.Fatalf("stream calls = %v, want all three overloaded credentials before %q", calls, auths[3].ID)
+	}
+	gotOverloaded := append([]string(nil), calls[:len(calls)-1]...)
+	wantOverloaded := []string{auths[0].ID, auths[1].ID, auths[2].ID}
+	slices.Sort(gotOverloaded)
+	slices.Sort(wantOverloaded)
+	if !slices.Equal(gotOverloaded, wantOverloaded) {
+		t.Fatalf("overloaded credentials tried = %v, want every credential %v", gotOverloaded, wantOverloaded)
 	}
 }
 

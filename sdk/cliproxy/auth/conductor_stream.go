@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"strings"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	"github.com/tidwall/gjson"
 )
 
 func discardStreamChunks(ch <-chan cliproxyexecutor.StreamChunk) {
@@ -21,6 +23,39 @@ func discardStreamChunks(ch <-chan cliproxyexecutor.StreamChunk) {
 type streamBootstrapError struct {
 	cause   error
 	headers http.Header
+}
+
+type streamBootstrapStatusError struct {
+	status int
+	body   []byte
+}
+
+func (e streamBootstrapStatusError) Error() string {
+	return string(e.body)
+}
+
+func (e streamBootstrapStatusError) StatusCode() int {
+	return e.status
+}
+
+func streamBootstrapPayloadError(payload []byte) error {
+	candidates := [][]byte{bytes.TrimSpace(payload)}
+	for _, line := range bytes.Split(payload, []byte{'\n'}) {
+		if data, ok := bytes.CutPrefix(bytes.TrimSpace(line), []byte("data:")); ok {
+			candidates = append(candidates, bytes.TrimSpace(data))
+		}
+	}
+	for _, candidate := range candidates {
+		if len(candidate) == 0 {
+			continue
+		}
+		errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(candidate, "error.type").String()))
+		errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(candidate, "error.code").String()))
+		if errorType == "service_unavailable_error" && errorCode == "server_is_overloaded" {
+			return streamBootstrapStatusError{status: http.StatusServiceUnavailable, body: bytes.Clone(candidate)}
+		}
+	}
+	return nil
 }
 
 func cloneHTTPHeader(headers http.Header) http.Header {
@@ -105,6 +140,9 @@ func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamC
 		}
 		if chunk.Err != nil {
 			return nil, false, chunk.Err
+		}
+		if errPayload := streamBootstrapPayloadError(chunk.Payload); errPayload != nil {
+			return nil, false, errPayload
 		}
 		buffered = append(buffered, chunk)
 		if len(chunk.Payload) > 0 {
