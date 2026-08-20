@@ -204,7 +204,7 @@ func codexTerminalStreamErrShouldHandle(body []byte) bool {
 	if codexTerminalErrorIsContextLength(body) {
 		return true
 	}
-	if isCodexUsageLimitError(body) || isCodexModelCapacityError(body) {
+	if isCodexUsageLimitError(body) || isCodexModelCapacityError(body) || isCodexServerOverloadedError(body) {
 		return true
 	}
 	code, _, ok := codexStatusErrorClassification(http.StatusBadRequest, body)
@@ -284,7 +284,9 @@ func codexTerminalErrorIsContextLength(body []byte) bool {
 
 func newCodexStatusErr(statusCode int, body []byte) statusErr {
 	errCode := statusCode
-	if isCodexModelCapacityError(body) || isCodexUsageLimitError(body) {
+	if isCodexServerOverloadedError(body) {
+		errCode = http.StatusServiceUnavailable
+	} else if isCodexModelCapacityError(body) || isCodexUsageLimitError(body) {
 		errCode = http.StatusTooManyRequests
 	}
 	body = classifyCodexStatusError(errCode, body)
@@ -339,6 +341,15 @@ func codexStatusErrorClassification(statusCode int, body []byte) (code string, e
 	default:
 		return "", "", false
 	}
+}
+
+func isCodexServerOverloadedError(errorBody []byte) bool {
+	if len(errorBody) == 0 {
+		return false
+	}
+	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, "error.code").String()))
+	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, "error.type").String()))
+	return errorCode == "server_is_overloaded" || errorType == "service_unavailable_error"
 }
 
 func isCodexModelCapacityError(errorBody []byte) bool {
