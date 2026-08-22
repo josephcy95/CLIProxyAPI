@@ -305,6 +305,9 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 						}
 					}
 				}
+				if requestRetry, okRetry := authFileRequestRetryFromJSON(data); okRetry {
+					fileData["request_retry"] = requestRetry
+				}
 			}
 
 			files = append(files, fileData)
@@ -537,7 +540,18 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 	if allow, ok := authAllowPrivateInstructionsValue(auth); ok {
 		entry["allow_private_instructions"] = allow
 	}
+	if requestRetry, ok := auth.RequestRetryOverride(); ok {
+		entry["request_retry"] = requestRetry
+	}
 	return entry
+}
+
+func authFileRequestRetryFromJSON(data []byte) (int, bool) {
+	var metadata map[string]any
+	if errUnmarshal := json.Unmarshal(data, &metadata); errUnmarshal != nil {
+		return 0, false
+	}
+	return (&coreauth.Auth{Metadata: metadata}).RequestRetryOverride()
 }
 
 func authWeightValue(auth *coreauth.Auth) (int64, bool) {

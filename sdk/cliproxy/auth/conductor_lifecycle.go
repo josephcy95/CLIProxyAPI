@@ -69,6 +69,7 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	if auth == nil {
 		return nil, nil
 	}
+	NormalizeCredentialMetadata(auth.Metadata)
 	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 		return nil, fmt.Errorf("register auth: %w", errWeight)
 	}
@@ -111,6 +112,7 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	if auth == nil || auth.ID == "" {
 		return nil, nil
 	}
+	NormalizeCredentialMetadata(auth.Metadata)
 	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 		return nil, fmt.Errorf("update auth: %w", errWeight)
 	}
@@ -247,6 +249,7 @@ func (m *Manager) Load(ctx context.Context) error {
 		if auth == nil || auth.ID == "" {
 			continue
 		}
+		NormalizeCredentialMetadata(auth.Metadata)
 		if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 			continue
 		}

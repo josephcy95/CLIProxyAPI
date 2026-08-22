@@ -36,6 +36,17 @@ func rejectInvalidCredentialWeight(c *gin.Context, field string, weight *int) bo
 	return false
 }
 
+// rejectInvalidFingerprintProfile fails a write that carries a value the request
+// path would silently ignore, so a typo surfaces here instead of as a warning
+// behind every later request.
+func rejectInvalidFingerprintProfile(c *gin.Context, field, profile string) bool {
+	if errValidate := config.ValidateClaudeFingerprintProfile(profile); errValidate != nil {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("%s: %v", field, errValidate)})
+		return true
+	}
+	return false
+}
+
 // Generic helpers for list[string]
 func (h *Handler) putStringList(c *gin.Context, set func([]string), after func()) {
 	data, err := c.GetRawData()
@@ -209,11 +220,24 @@ func (h *Handler) PatchGeminiKey(c *gin.Context) {
 	if targetIndex == -1 && body.Match != nil {
 		match := strings.TrimSpace(*body.Match)
 		if match != "" {
+			baseRaw, hasBase := c.GetQuery("base-url")
+			base := strings.TrimSpace(baseRaw)
+			matches := make([]int, 0, 1)
 			for i := range h.cfg.GeminiKey {
-				if h.cfg.GeminiKey[i].APIKey == match {
-					targetIndex = i
-					break
+				if strings.TrimSpace(h.cfg.GeminiKey[i].APIKey) != match {
+					continue
 				}
+				if hasBase && strings.TrimSpace(h.cfg.GeminiKey[i].BaseURL) != base {
+					continue
+				}
+				matches = append(matches, i)
+			}
+			if len(matches) > 1 {
+				c.JSON(400, gin.H{"error": "multiple items match; index is required"})
+				return
+			}
+			if len(matches) == 1 {
+				targetIndex = matches[0]
 			}
 		}
 	}
@@ -224,14 +248,7 @@ func (h *Handler) PatchGeminiKey(c *gin.Context) {
 
 	entry := h.cfg.GeminiKey[targetIndex]
 	if body.Value.APIKey != nil {
-		trimmed := strings.TrimSpace(*body.Value.APIKey)
-		if trimmed == "" {
-			h.cfg.GeminiKey = append(h.cfg.GeminiKey[:targetIndex], h.cfg.GeminiKey[targetIndex+1:]...)
-			h.cfg.SanitizeGeminiKeys()
-			h.persistLocked(c)
-			return
-		}
-		entry.APIKey = trimmed
+		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
 	}
 	if len(body.Value.Weight) > 0 {
 		weight, errWeight := parseCredentialWeightPatch(body.Value.Weight)
@@ -265,6 +282,12 @@ func (h *Handler) PatchGeminiKey(c *gin.Context) {
 	if body.Value.RequestScopedErrors != nil {
 		entry.RequestScopedErrors = append([]config.RequestScopedErrorRule(nil), *body.Value.RequestScopedErrors...)
 	}
+	if entry.APIKey == "" && entry.BaseURL == "" {
+		h.cfg.GeminiKey = append(h.cfg.GeminiKey[:targetIndex], h.cfg.GeminiKey[targetIndex+1:]...)
+		h.cfg.SanitizeGeminiKeys()
+		h.persistLocked(c)
+		return
+	}
 	h.cfg.GeminiKey[targetIndex] = entry
 	h.cfg.SanitizeGeminiKeys()
 	h.persistLocked(c)
@@ -276,20 +299,25 @@ func (h *Handler) DeleteGeminiKey(c *gin.Context) {
 	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		if baseRaw, okBase := c.GetQuery("base-url"); okBase {
 			base := strings.TrimSpace(baseRaw)
-			out := make([]config.GeminiKey, 0, len(h.cfg.GeminiKey))
-			for _, v := range h.cfg.GeminiKey {
-				if strings.TrimSpace(v.APIKey) == val && strings.TrimSpace(v.BaseURL) == base {
-					continue
+			matchIndex := -1
+			matchCount := 0
+			for i := range h.cfg.GeminiKey {
+				if strings.TrimSpace(h.cfg.GeminiKey[i].APIKey) == val && strings.TrimSpace(h.cfg.GeminiKey[i].BaseURL) == base {
+					matchIndex = i
+					matchCount++
 				}
-				out = append(out, v)
 			}
-			if len(out) != len(h.cfg.GeminiKey) {
-				h.cfg.GeminiKey = out
-				h.cfg.SanitizeGeminiKeys()
-				h.persistLocked(c)
-			} else {
+			if matchCount == 0 {
 				c.JSON(404, gin.H{"error": "item not found"})
+				return
 			}
+			if matchCount > 1 {
+				c.JSON(400, gin.H{"error": "multiple items match; index is required"})
+				return
+			}
+			h.cfg.GeminiKey = append(h.cfg.GeminiKey[:matchIndex], h.cfg.GeminiKey[matchIndex+1:]...)
+			h.cfg.SanitizeGeminiKeys()
+			h.persistLocked(c)
 			return
 		}
 
@@ -395,11 +423,24 @@ func (h *Handler) PatchInteractionsKey(c *gin.Context) {
 	if targetIndex == -1 && body.Match != nil {
 		match := strings.TrimSpace(*body.Match)
 		if match != "" {
+			baseRaw, hasBase := c.GetQuery("base-url")
+			base := strings.TrimSpace(baseRaw)
+			matches := make([]int, 0, 1)
 			for i := range h.cfg.InteractionsKey {
-				if h.cfg.InteractionsKey[i].APIKey == match {
-					targetIndex = i
-					break
+				if strings.TrimSpace(h.cfg.InteractionsKey[i].APIKey) != match {
+					continue
 				}
+				if hasBase && strings.TrimSpace(h.cfg.InteractionsKey[i].BaseURL) != base {
+					continue
+				}
+				matches = append(matches, i)
+			}
+			if len(matches) > 1 {
+				c.JSON(400, gin.H{"error": "multiple items match; index is required"})
+				return
+			}
+			if len(matches) == 1 {
+				targetIndex = matches[0]
 			}
 		}
 	}
@@ -410,14 +451,7 @@ func (h *Handler) PatchInteractionsKey(c *gin.Context) {
 
 	entry := h.cfg.InteractionsKey[targetIndex]
 	if body.Value.APIKey != nil {
-		trimmed := strings.TrimSpace(*body.Value.APIKey)
-		if trimmed == "" {
-			h.cfg.InteractionsKey = append(h.cfg.InteractionsKey[:targetIndex], h.cfg.InteractionsKey[targetIndex+1:]...)
-			h.cfg.SanitizeInteractionsKeys()
-			h.persistLocked(c)
-			return
-		}
-		entry.APIKey = trimmed
+		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
 	}
 	if len(body.Value.Weight) > 0 {
 		weight, errWeight := parseCredentialWeightPatch(body.Value.Weight)
@@ -451,6 +485,12 @@ func (h *Handler) PatchInteractionsKey(c *gin.Context) {
 	if body.Value.RequestScopedErrors != nil {
 		entry.RequestScopedErrors = append([]config.RequestScopedErrorRule(nil), *body.Value.RequestScopedErrors...)
 	}
+	if entry.APIKey == "" && entry.BaseURL == "" {
+		h.cfg.InteractionsKey = append(h.cfg.InteractionsKey[:targetIndex], h.cfg.InteractionsKey[targetIndex+1:]...)
+		h.cfg.SanitizeInteractionsKeys()
+		h.persistLocked(c)
+		return
+	}
 	h.cfg.InteractionsKey[targetIndex] = entry
 	h.cfg.SanitizeInteractionsKeys()
 	h.persistLocked(c)
@@ -462,20 +502,25 @@ func (h *Handler) DeleteInteractionsKey(c *gin.Context) {
 	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		if baseRaw, okBase := c.GetQuery("base-url"); okBase {
 			base := strings.TrimSpace(baseRaw)
-			out := make([]config.GeminiKey, 0, len(h.cfg.InteractionsKey))
-			for _, v := range h.cfg.InteractionsKey {
-				if strings.TrimSpace(v.APIKey) == val && strings.TrimSpace(v.BaseURL) == base {
-					continue
+			matchIndex := -1
+			matchCount := 0
+			for i := range h.cfg.InteractionsKey {
+				if strings.TrimSpace(h.cfg.InteractionsKey[i].APIKey) == val && strings.TrimSpace(h.cfg.InteractionsKey[i].BaseURL) == base {
+					matchIndex = i
+					matchCount++
 				}
-				out = append(out, v)
 			}
-			if len(out) != len(h.cfg.InteractionsKey) {
-				h.cfg.InteractionsKey = out
-				h.cfg.SanitizeInteractionsKeys()
-				h.persistLocked(c)
-			} else {
+			if matchCount == 0 {
 				c.JSON(404, gin.H{"error": "item not found"})
+				return
 			}
+			if matchCount > 1 {
+				c.JSON(400, gin.H{"error": "multiple items match; index is required"})
+				return
+			}
+			h.cfg.InteractionsKey = append(h.cfg.InteractionsKey[:matchIndex], h.cfg.InteractionsKey[matchIndex+1:]...)
+			h.cfg.SanitizeInteractionsKeys()
+			h.persistLocked(c)
 			return
 		}
 
@@ -541,6 +586,9 @@ func (h *Handler) PutClaudeKeys(c *gin.Context) {
 		if rejectInvalidCredentialWeight(c, fmt.Sprintf("claude-api-key[%d].weight", i), arr[i].Weight) {
 			return
 		}
+		if rejectInvalidFingerprintProfile(c, fmt.Sprintf("claude-api-key[%d].fingerprint-profile", i), arr[i].FingerprintProfile) {
+			return
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -551,6 +599,7 @@ func (h *Handler) PutClaudeKeys(c *gin.Context) {
 func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	type claudeKeyPatch struct {
 		APIKey                  *string                          `json:"api-key"`
+		FingerprintProfile      *string                          `json:"fingerprint-profile"`
 		Weight                  json.RawMessage                  `json:"weight"`
 		Prefix                  *string                          `json:"prefix"`
 		BaseURL                 *string                          `json:"base-url"`
@@ -596,6 +645,12 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	entry := h.cfg.ClaudeKey[targetIndex]
 	if body.Value.APIKey != nil {
 		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
+	}
+	if body.Value.FingerprintProfile != nil {
+		if rejectInvalidFingerprintProfile(c, "fingerprint-profile", *body.Value.FingerprintProfile) {
+			return
+		}
+		entry.FingerprintProfile, _ = config.NormalizeClaudeFingerprintProfile(*body.Value.FingerprintProfile)
 	}
 	if len(body.Value.Weight) > 0 {
 		weight, errWeight := parseCredentialWeightPatch(body.Value.Weight)
@@ -965,14 +1020,7 @@ func (h *Handler) PatchVertexCompatKey(c *gin.Context) {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
 	}
 	if body.Value.BaseURL != nil {
-		trimmed := strings.TrimSpace(*body.Value.BaseURL)
-		if trimmed == "" {
-			h.cfg.VertexCompatAPIKey = append(h.cfg.VertexCompatAPIKey[:targetIndex], h.cfg.VertexCompatAPIKey[targetIndex+1:]...)
-			h.cfg.SanitizeVertexCompatKeys()
-			h.persistLocked(c)
-			return
-		}
-		entry.BaseURL = trimmed
+		entry.BaseURL = strings.TrimSpace(*body.Value.BaseURL)
 	}
 	if body.Value.ProxyURL != nil {
 		entry.ProxyURL = strings.TrimSpace(*body.Value.ProxyURL)
@@ -1694,6 +1742,11 @@ func normalizeClaudeKey(entry *config.ClaudeKey) {
 		return
 	}
 	entry.APIKey = strings.TrimSpace(entry.APIKey)
+	if normalized, ok := config.NormalizeClaudeFingerprintProfile(entry.FingerprintProfile); ok {
+		entry.FingerprintProfile = normalized
+	} else {
+		entry.FingerprintProfile = strings.TrimSpace(entry.FingerprintProfile)
+	}
 	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)

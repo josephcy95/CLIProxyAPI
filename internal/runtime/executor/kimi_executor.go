@@ -156,7 +156,7 @@ func (e *KimiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	util.ApplyCustomHeadersFromAttrs(httpReq, attrs)
+	util.ApplyCustomHeadersFromAttrs(httpReq, attrs, opts.Headers)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -280,7 +280,7 @@ func (e *KimiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	util.ApplyCustomHeadersFromAttrs(httpReq, attrs)
+	util.ApplyCustomHeadersFromAttrs(httpReq, attrs, opts.Headers)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID

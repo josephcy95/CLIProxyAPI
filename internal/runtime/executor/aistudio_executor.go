@@ -148,7 +148,7 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	util.ApplyCustomHeadersFromAttrs(&http.Request{Header: wsReq.Headers}, attrs)
+	util.ApplyCustomHeadersFromAttrs(&http.Request{Header: wsReq.Headers}, attrs, opts.Headers)
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -220,7 +220,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	util.ApplyCustomHeadersFromAttrs(&http.Request{Header: wsReq.Headers}, attrs)
+	util.ApplyCustomHeadersFromAttrs(&http.Request{Header: wsReq.Headers}, attrs, opts.Headers)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -487,6 +487,7 @@ func (e *AIStudioExecutor) translateRequest(ctx context.Context, req cliproxyexe
 		action = "streamGenerateContent"
 	}
 	payload, _ = sjson.DeleteBytes(payload, "session_id")
+	payload = helps.EnsureGeminiLeadingUserContent(payload, "contents")
 	return payload, translatedPayload{payload: payload, action: action, toFormat: to}, nil
 }
 

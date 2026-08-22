@@ -687,8 +687,8 @@ func pruneMappingToGeneratedKeys(dstRoot, srcRoot *yaml.Node, keyPath ...string)
 	}
 	srcIdx := findMapKeyIndex(srcRoot, key)
 	if srcIdx < 0 {
-		// Keep an explicit empty mapping for oauth-model-alias when it was previously present.
-		// When users delete the last channel from oauth-model-alias via the management API,
+		// Keep an explicit empty mapping for oauth-model-alias when previously present.
+		// When users delete the last channel via the management API,
 		// we want that deletion to persist across hot reloads and restarts.
 		if key == "oauth-model-alias" {
 			dstRoot.Content[dstIdx+1] = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
