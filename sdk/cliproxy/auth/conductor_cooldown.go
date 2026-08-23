@@ -527,6 +527,7 @@ func (m *Manager) resetQuotaBefore(ctx context.Context, authID string, usageLimi
 		auth.LastError = nil
 		auth.StatusMessage = ""
 		auth.Status = StatusActive
+		clearDisabledReasonOnSuccessfulAuth(auth, now)
 	}
 	if auth.Metadata != nil {
 		syncAuthRuntimeMetadata(auth, now)
@@ -840,16 +841,18 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				state := ensureModelState(auth, modelKey)
 				resetModelState(state, now)
 				updateAggregatedAvailability(auth, now)
-				if !hasModelError(auth, now) {
+				if !auth.Disabled && auth.Status != StatusDisabled && !hasModelError(auth, now) {
 					auth.LastError = nil
 					auth.StatusMessage = ""
 					auth.Status = StatusActive
+					clearDisabledReasonOnSuccessfulAuth(auth, now)
 				}
 				auth.UpdatedAt = now
 				shouldResumeModel = true
 				clearModelQuota = true
 			} else {
 				clearAuthStateOnSuccess(auth, now)
+				clearDisabledReasonOnSuccessfulAuth(auth, now)
 			}
 		} else if m.shouldAutoDisableXAIAuth(result) {
 			m.disableXAIAuthForPermissionFailure(auth, result.Error, now)

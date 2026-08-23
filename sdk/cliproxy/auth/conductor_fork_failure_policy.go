@@ -370,6 +370,19 @@ func (m *Manager) trackCodexExhaustionCounter(auth *Auth, result Result, kind co
 	return false
 }
 
+// clearDisabledReasonOnSuccessfulAuth removes an automatic authentication diagnostic after
+// a confirmed successful request or provider health check. Explicitly disabled auths retain
+// their reason until the user re-enables or replaces them.
+func clearDisabledReasonOnSuccessfulAuth(auth *Auth, now time.Time) {
+	if auth == nil || auth.Disabled || auth.Status == StatusDisabled || auth.Metadata == nil {
+		return
+	}
+	if hasModelError(auth, now) {
+		return
+	}
+	delete(auth.Metadata, "disabled_reason")
+}
+
 func (m *Manager) disableCodexAuth(auth *Auth, reason string, resultErr *Error, now time.Time) {
 	if auth == nil {
 		return

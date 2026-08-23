@@ -258,6 +258,30 @@ func TestManagerResetQuotaClearsPersistedRuntimeCooldown(t *testing.T) {
 	}
 }
 
+func TestManagerResetQuotaUsageLimitBeforeClearsStaleDisabledReason(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:       "recover-codex-clears-reason",
+		Provider: "codex",
+		Status:   StatusActive,
+		Metadata: map[string]any{
+			"type":            "codex",
+			"disabled":        false,
+			"disabled_reason": "auth_unavailable",
+		},
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	if _, _, err := manager.ResetQuotaUsageLimitBefore(context.Background(), auth.ID, time.Now()); err != nil {
+		t.Fatalf("recover quota: %v", err)
+	}
+	updated, _ := manager.GetByID(auth.ID)
+	if _, ok := updated.Metadata["disabled_reason"]; ok {
+		t.Fatalf("disabled_reason remains after successful quota recovery: %#v", updated.Metadata["disabled_reason"])
+	}
+}
+
 func TestManagerResetQuotaUsageLimitBeforePreservesNewerFailureAndAuthCounter(t *testing.T) {
 	manager := NewManager(nil, nil, nil)
 	observedAt := time.Now()

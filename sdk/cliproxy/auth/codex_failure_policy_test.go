@@ -309,6 +309,121 @@ func TestManagerMarkResult_CodexTransientRateLimitDoesNotCountUsageLimit(t *test
 	}
 }
 
+func TestManagerMarkResult_CodexSuccessClearsStaleDisabledReason(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:       "codex-success-clears-reason",
+		Provider: "codex",
+		Status:   StatusActive,
+		Metadata: map[string]any{
+			"type":            "codex",
+			"disabled":        false,
+			"disabled_reason": `{"error":{"type":"authentication_error","code":"auth_unavailable"}}`,
+		},
+		LastError:     &Error{HTTPStatus: http.StatusUnauthorized, Code: "auth_unavailable"},
+		StatusMessage: "auth_unavailable",
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID: auth.ID, Provider: "codex", Model: "gpt-5.4", Success: true,
+	})
+
+	updated, _ := manager.GetByID(auth.ID)
+	if _, ok := updated.Metadata["disabled_reason"]; ok {
+		t.Fatalf("disabled_reason remains after success: %#v", updated.Metadata["disabled_reason"])
+	}
+	if updated.LastError != nil || updated.StatusMessage != "" || updated.Status != StatusActive {
+		t.Fatalf("auth diagnostics remain after success: status=%s message=%q error=%#v", updated.Status, updated.StatusMessage, updated.LastError)
+	}
+	if updated.Disabled {
+		t.Fatal("successful request must not change enabled auth to disabled")
+	}
+}
+
+func TestManagerMarkResult_CodexSuccessPreservesReasonWhileAnotherModelErrors(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	now := time.Now()
+	auth := &Auth{
+		ID:            "codex-success-other-model-error",
+		Provider:      "codex",
+		Status:        StatusError,
+		StatusMessage: "auth_unavailable",
+		LastError:     &Error{HTTPStatus: http.StatusUnauthorized, Code: "auth_unavailable"},
+		Metadata: map[string]any{
+			"type":            "codex",
+			"disabled":        false,
+			"disabled_reason": "auth_unavailable",
+		},
+		ModelStates: map[string]*ModelState{
+			"gpt-5.4": {
+				Status:         StatusError,
+				Unavailable:    true,
+				NextRetryAfter: now.Add(time.Hour),
+				LastError:      &Error{HTTPStatus: http.StatusUnauthorized, Code: "auth_unavailable"},
+			},
+			"gpt-5.3": {
+				Status:         StatusError,
+				Unavailable:    true,
+				NextRetryAfter: now.Add(time.Hour),
+				LastError:      &Error{HTTPStatus: http.StatusUnauthorized, Code: "auth_unavailable"},
+			},
+		},
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID: auth.ID, Provider: "codex", Model: "gpt-5.4", Success: true,
+	})
+
+	updated, _ := manager.GetByID(auth.ID)
+	if reason, _ := updated.Metadata["disabled_reason"].(string); reason != "auth_unavailable" {
+		t.Fatalf("disabled_reason = %q, want preserved while another model errors", reason)
+	}
+	if updated.LastError == nil || updated.StatusMessage == "" {
+		t.Fatalf("shared auth diagnostics cleared while another model errors: %+v", updated)
+	}
+	other := updated.ModelStates["gpt-5.3"]
+	if other == nil || !other.Unavailable || other.NextRetryAfter.IsZero() {
+		t.Fatalf("unrelated model error was cleared: %+v", other)
+	}
+}
+
+func TestManagerMarkResult_SuccessDoesNotClearDisabledCredentialReason(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:            "codex-manually-disabled",
+		Provider:      "codex",
+		Disabled:      true,
+		Status:        StatusDisabled,
+		StatusMessage: "disabled via management API",
+		Metadata: map[string]any{
+			"type":            "codex",
+			"disabled":        true,
+			"disabled_reason": "previous auth failure",
+		},
+	}
+	if _, err := manager.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID: auth.ID, Provider: "codex", Model: "gpt-5.4", Success: true,
+	})
+
+	updated, _ := manager.GetByID(auth.ID)
+	if !updated.Disabled || updated.Status != StatusDisabled {
+		t.Fatalf("disabled auth was re-enabled: %+v", updated)
+	}
+	if reason, _ := updated.Metadata["disabled_reason"].(string); reason != "previous auth failure" {
+		t.Fatalf("disabled_reason = %q, want preserved for disabled auth", reason)
+	}
+}
+
 func TestManagerMarkResult_CodexSuccessResetsUsageLimitCounter(t *testing.T) {
 	disableAfter := 3
 	manager := NewManager(nil, nil, nil)
