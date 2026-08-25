@@ -54,6 +54,7 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 		}
 		// Enrich before auth preparation so prepare-stage usage records observe the client request.
 		execCtx = contextWithRequestedModelAlias(execCtx, opts, routeModel)
+		execCtx = newUpstreamAttemptContext(execCtx)
 		if rt := m.roundTripperFor(auth); rt != nil {
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
@@ -86,6 +87,7 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 		}
 		didRefreshOnUnauthorized := false
 		for _, upstreamModel := range models {
+			execCtx = newUpstreamAttemptContext(execCtx)
 			resultModel := m.stateModelForExecution(preparedAuth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
@@ -150,7 +152,8 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 				}
 			}
 			if errExecute != nil {
-				if refreshed, okRefresh, errRefresh := m.tryRefreshExecutionAuthAfterUnauthorized(execCtx, selection.Executor, refreshAuth, errExecute, didRefreshOnUnauthorized, true); errRefresh != nil {
+				refreshCtx := newUpstreamAttemptContext(execCtx)
+				if refreshed, okRefresh, errRefresh := m.tryRefreshExecutionAuthAfterUnauthorized(refreshCtx, selection.Executor, refreshAuth, errExecute, didRefreshOnUnauthorized, true); errRefresh != nil {
 					errExecute = errRefresh
 				} else if okRefresh {
 					preparedAuth = refreshed
@@ -158,6 +161,7 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 					didRefreshOnUnauthorized = true
 					publishSelectedAuthMetadata(opts.Metadata, preparedAuth)
 					setEffectiveAuth(preparedAuth)
+
 					response, errExecute = execute()
 					if countTokens && isUnauthorizedError(errExecute) {
 						_, fingerprint := getEffectiveAuth()
