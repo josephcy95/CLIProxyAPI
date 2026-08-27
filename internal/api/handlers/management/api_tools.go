@@ -206,6 +206,17 @@ func (h *Handler) APICall(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to read response"})
 		return
 	}
+	if auth != nil && isCodexUsageEndpoint(urlStr) && codexUsageAuthFailure(resp.StatusCode, respBody) {
+		h.authManager.MarkResult(c.Request.Context(), coreauth.Result{
+			AuthID:   auth.ID,
+			Provider: "codex",
+			Success:  false,
+			Error: &coreauth.Error{
+				HTTPStatus: resp.StatusCode,
+				Message:    strings.TrimSpace(string(respBody)),
+			},
+		})
+	}
 	c.JSON(http.StatusOK, apiCallResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
@@ -650,6 +661,25 @@ func resolveOpenAICompatAPIKeyProxyURL(cfg *config.Config, auth *coreauth.Auth, 
 		}
 	}
 	return ""
+}
+
+const codexUsageEndpoint = "https://chatgpt.com/backend-api/wham/usage"
+
+func isCodexUsageEndpoint(rawURL string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(rawURL), "/"), codexUsageEndpoint)
+}
+
+func codexUsageAuthFailure(status int, body []byte) bool {
+	if status == http.StatusUnauthorized || status == http.StatusPaymentRequired {
+		return true
+	}
+	if status != http.StatusForbidden {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "invalid") || strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "authentication") || strings.Contains(lower, "deactivated") ||
+		strings.Contains(lower, "permission denied")
 }
 
 func buildProxyTransport(proxyStr string) *http.Transport {

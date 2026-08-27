@@ -262,6 +262,42 @@ func TestAPICallTransportAPIKeyAuthFallsBackToConfigProxyURL(t *testing.T) {
 	}
 }
 
+func TestCodexUsageEndpointMatch(t *testing.T) {
+	t.Parallel()
+	if !isCodexUsageEndpoint(codexUsageEndpoint + "/") {
+		t.Fatal("official Codex usage endpoint with trailing slash was not matched")
+	}
+	if isCodexUsageEndpoint("https://example.com/backend-api/wham/usage") {
+		t.Fatal("unrelated usage endpoint was matched")
+	}
+}
+
+func TestCodexUsageAuthFailureClassification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, body: `{"error":"invalid token"}`, want: true},
+		{name: "payment required", status: http.StatusPaymentRequired, body: `{"code":"deactivated_workspace"}`, want: true},
+		{name: "auth forbidden", status: http.StatusForbidden, body: `{"error":"authentication denied"}`, want: true},
+		{name: "generic forbidden", status: http.StatusForbidden, body: `{"error":"endpoint unavailable"}`},
+		{name: "rate limit", status: http.StatusTooManyRequests, body: `{"error":"usage_limit_reached"}`},
+		{name: "server error", status: http.StatusServiceUnavailable, body: `service unavailable`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := codexUsageAuthFailure(test.status, []byte(test.body)); got != test.want {
+				t.Fatalf("codexUsageAuthFailure(%d, %q) = %t, want %t", test.status, test.body, got, test.want)
+			}
+		})
+	}
+}
+
 func TestAuthByIndexDistinguishesSharedAPIKeysAcrossProviders(t *testing.T) {
 	t.Parallel()
 
