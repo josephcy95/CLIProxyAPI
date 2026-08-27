@@ -207,11 +207,16 @@ func (h *Handler) APICall(c *gin.Context) {
 		return
 	}
 	if auth != nil && isCodexUsageEndpoint(urlStr) && codexUsageAuthFailure(resp.StatusCode, respBody) {
+		errorCode := ""
+		if resp.StatusCode == http.StatusForbidden {
+			errorCode = "auth_unavailable"
+		}
 		h.authManager.MarkResult(c.Request.Context(), coreauth.Result{
 			AuthID:   auth.ID,
 			Provider: "codex",
 			Success:  false,
 			Error: &coreauth.Error{
+				Code:       errorCode,
 				HTTPStatus: resp.StatusCode,
 				Message:    strings.TrimSpace(string(respBody)),
 			},
