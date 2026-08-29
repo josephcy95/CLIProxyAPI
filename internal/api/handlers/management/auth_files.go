@@ -414,6 +414,11 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 		if planCheckedAt := authMetadataString(auth, "plan_checked_at"); planCheckedAt != "" {
 			entry["plan_checked_at"] = planCheckedAt
 		}
+		if snapshot := authCodexQuotaSnapshot(auth); len(snapshot) > 0 {
+			for key, value := range snapshot {
+				entry[key] = value
+			}
+		}
 	}
 	if strings.EqualFold(strings.TrimSpace(auth.Provider), "xai") {
 		if statusCode, cooldownUntil := xaiAuthStatus(auth, time.Now()); statusCode > 0 || !cooldownUntil.IsZero() {

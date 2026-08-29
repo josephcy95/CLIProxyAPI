@@ -5,10 +5,12 @@ package management
 // auth_files.go do not silently drop them.
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
@@ -40,6 +42,111 @@ func authMetadataString(auth *coreauth.Auth, key string) string {
 	}
 	value, _ := auth.Metadata[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func authMetadataValue(auth *coreauth.Auth, key string) any {
+	if auth == nil || auth.Metadata == nil {
+		return nil
+	}
+	value, ok := auth.Metadata[key]
+	if !ok || value == nil {
+		return nil
+	}
+	if text, okString := value.(string); okString && strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return value
+}
+
+func authMetadataNumber(auth *coreauth.Auth, key string) (float64, bool) {
+	switch value := authMetadataValue(auth, key).(type) {
+	case nil:
+		return 0, false
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int32:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case uint:
+		return float64(value), true
+	case uint32:
+		return float64(value), true
+	case uint64:
+		return float64(value), true
+	case json.Number:
+		parsed, errParse := value.Float64()
+		return parsed, errParse == nil
+	case string:
+		parsed, errParse := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return parsed, errParse == nil
+	default:
+		return 0, false
+	}
+}
+
+func jsonWholeNumber(value float64) any {
+	if value == float64(int64(value)) {
+		return int64(value)
+	}
+	return value
+}
+
+func authMetadataSlice(auth *coreauth.Auth, key string) ([]any, bool) {
+	if auth == nil || auth.Metadata == nil {
+		return nil, false
+	}
+	raw, ok := auth.Metadata[key]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	switch value := raw.(type) {
+	case []any:
+		return value, true
+	case []map[string]any:
+		out := make([]any, 0, len(value))
+		for _, item := range value {
+			out = append(out, item)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+// authCodexQuotaSnapshot copies persisted Codex subscription / reset-credit
+// fields onto the management list DTO. Latest upstream values are stored on
+// the auth file via PATCH and always replace the previous snapshot.
+func authCodexQuotaSnapshot(auth *coreauth.Auth) gin.H {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return nil
+	}
+	out := gin.H{}
+	if count, ok := authMetadataNumber(auth, "rate_limit_reset_credits_available_count"); ok {
+		out["rate_limit_reset_credits_available_count"] = jsonWholeNumber(count)
+	}
+	if count, ok := authMetadataNumber(auth, "rate_limit_reset_credits_applicable_available_count"); ok {
+		out["rate_limit_reset_credits_applicable_available_count"] = jsonWholeNumber(count)
+	}
+	if credits, ok := authMetadataSlice(auth, "rate_limit_reset_credits"); ok {
+		out["rate_limit_reset_credits"] = credits
+	}
+	if checkedAt := authMetadataString(auth, "rate_limit_reset_credits_checked_at"); checkedAt != "" {
+		out["rate_limit_reset_credits_checked_at"] = checkedAt
+	}
+	if until := authMetadataValue(auth, "chatgpt_subscription_active_until"); until != nil {
+		out["chatgpt_subscription_active_until"] = until
+	} else if until := authMetadataValue(auth, "subscription_active_until"); until != nil {
+		out["chatgpt_subscription_active_until"] = until
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func xaiAuthStatus(auth *coreauth.Auth, now time.Time) (int, time.Time) {
