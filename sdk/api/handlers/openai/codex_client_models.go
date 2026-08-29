@@ -9,12 +9,16 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 )
 
-func (h *OpenAIAPIHandler) codexClientModelsResponse() map[string]any {
+func (h *OpenAIAPIHandler) codexClientModelsResponse(clientVersion ...string) map[string]any {
+	version := ""
+	if len(clientVersion) > 0 {
+		version = clientVersion[0]
+	}
 	optimizeMultiAgentV2 := h != nil && h.Cfg != nil && h.Cfg.CodexOptimizeMultiAgentV2
 	// Build from base registry models (without private virtual ids), then clone catalog
 	// entries so private variants keep full template/capability metadata.
 	baseModels := registry.GetGlobalRegistry().GetAvailableModels("openai")
-	built := codexmodels.BuildResponse(baseModels, codexClientProvidersForModel(h), optimizeMultiAgentV2)
+	built := codexmodels.BuildResponseForClient(baseModels, codexClientProvidersForModel(h), optimizeMultiAgentV2, version)
 	if raw, ok := built["models"].([]map[string]any); ok {
 		built["models"] = handlers.ExpandPrivateCodexClientModels(h.AuthManager, raw)
 	}
@@ -45,4 +49,10 @@ func CodexClientModelsResponse(models []map[string]any) map[string]any {
 // and advertises multi-agent v2 for synthesized models when enabled.
 func CodexClientModelsResponseWithMultiAgentV2(models []map[string]any, enabled bool) map[string]any {
 	return codexmodels.BuildResponse(models, nil, enabled)
+}
+
+// CodexClientModelsResponseForClient builds a Codex client model response
+// tailored for a specific client version.
+func CodexClientModelsResponseForClient(models []map[string]any, clientVersion string, enabled bool) map[string]any {
+	return codexmodels.BuildResponseForClient(models, nil, enabled, clientVersion)
 }
