@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // QueryFilter selects usage events for list/summary APIs.
@@ -47,19 +48,32 @@ type Summary struct {
 	PricedCalls         int64   `json:"priced_calls"`
 }
 
+const (
+	recentRequestBucketCount      = 20
+	recentRequestBucketDurationMS = int64(10 * time.Minute / time.Millisecond)
+)
+
+// RecentRequestBucket is one ten-minute request outcome bucket.
+type RecentRequestBucket struct {
+	Time    string `json:"time"`
+	Success int64  `json:"success"`
+	Failed  int64  `json:"failed"`
+}
+
 // AccountStat aggregates usage by auth/source.
 type AccountStat struct {
-	AuthIndex     string  `json:"auth_index,omitempty"`
-	Source        string  `json:"source,omitempty"`
-	SourceHash    string  `json:"source_hash,omitempty"`
-	Provider      string  `json:"provider,omitempty"`
-	TotalCalls    int64   `json:"total_calls"`
-	SuccessCalls  int64   `json:"success_calls"`
-	FailureCalls  int64   `json:"failure_calls"`
-	TotalTokens   int64   `json:"total_tokens"`
-	InputTokens   int64   `json:"input_tokens"`
-	OutputTokens  int64   `json:"output_tokens"`
-	EstimatedCost float64 `json:"estimated_cost"`
+	AuthIndex      string                `json:"auth_index,omitempty"`
+	Source         string                `json:"source,omitempty"`
+	SourceHash     string                `json:"source_hash,omitempty"`
+	Provider       string                `json:"provider,omitempty"`
+	TotalCalls     int64                 `json:"total_calls"`
+	SuccessCalls   int64                 `json:"success_calls"`
+	FailureCalls   int64                 `json:"failure_calls"`
+	TotalTokens    int64                 `json:"total_tokens"`
+	InputTokens    int64                 `json:"input_tokens"`
+	OutputTokens   int64                 `json:"output_tokens"`
+	EstimatedCost  float64               `json:"estimated_cost"`
+	RecentRequests []RecentRequestBucket `json:"recent_requests"`
 }
 
 // APIKeyStat aggregates usage by client API key.
@@ -250,6 +264,21 @@ func (s *Store) GetSummary(ctx context.Context, filter QueryFilter) (Summary, er
 	return summary, nil
 }
 
+func recentRequestBucketLabel(bucketID int64) string {
+	start := time.UnixMilli(bucketID * recentRequestBucketDurationMS).In(time.Local)
+	return start.Format("15:04") + "-" + start.Add(10*time.Minute).Format("15:04")
+}
+
+func emptyRecentRequestBuckets(now time.Time) []RecentRequestBucket {
+	currentBucketID := now.UnixMilli() / recentRequestBucketDurationMS
+	out := make([]RecentRequestBucket, recentRequestBucketCount)
+	for i := range out {
+		bucketID := currentBucketID - int64(recentRequestBucketCount-1-i)
+		out[i].Time = recentRequestBucketLabel(bucketID)
+	}
+	return out
+}
+
 // GetAccountStats groups usage by auth_index/source.
 func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit int) ([]AccountStat, error) {
 	if s == nil {
@@ -294,7 +323,77 @@ func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit i
 		}
 		out = append(out, st)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := s.attachAccountRecentRequests(ctx, filter, out, time.Now()); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) attachAccountRecentRequests(ctx context.Context, filter QueryFilter, stats []AccountStat, now time.Time) error {
+	if len(stats) == 0 {
+		return nil
+	}
+	currentBucketID := now.UnixMilli() / recentRequestBucketDurationMS
+	windowStartMS := (currentBucketID - int64(recentRequestBucketCount-1)) * recentRequestBucketDurationMS
+	windowEndMS := (currentBucketID+1)*recentRequestBucketDurationMS - 1
+	if filter.FromMS < windowStartMS {
+		filter.FromMS = windowStartMS
+	}
+	if filter.ToMS == 0 || filter.ToMS > windowEndMS {
+		filter.ToMS = windowEndMS
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+
+	statsByKey := make(map[string]*AccountStat, len(stats))
+	for i := range stats {
+		stats[i].RecentRequests = emptyRecentRequestBuckets(now)
+		key := AccountKey(stats[i].AuthIndex, stats[i].Source, stats[i].SourceHash, stats[i].Provider)
+		statsByKey[key] = &stats[i]
+	}
+	if filter.FromMS > filter.ToMS {
+		return nil
+	}
+
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
+		CAST(timestamp_ms / ? AS INTEGER) AS bucket_id,
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0)
+		FROM usage_events ` + where + `
+		GROUP BY auth_index, source, source_hash, provider, bucket_id`
+	queryArgs := make([]any, 0, len(args)+1)
+	queryArgs = append(queryArgs, recentRequestBucketDurationMS)
+	queryArgs = append(queryArgs, args...)
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var authIndex, source, sourceHash, provider string
+		var bucketID, success, failed int64
+		if err := rows.Scan(&authIndex, &source, &sourceHash, &provider, &bucketID, &success, &failed); err != nil {
+			return err
+		}
+		stat := statsByKey[AccountKey(authIndex, source, sourceHash, provider)]
+		if stat == nil {
+			continue
+		}
+		index := int(bucketID - (currentBucketID - int64(recentRequestBucketCount-1)))
+		if index < 0 || index >= len(stat.RecentRequests) {
+			continue
+		}
+		stat.RecentRequests[index].Success = success
+		stat.RecentRequests[index].Failed = failed
+	}
+	return rows.Err()
 }
 
 // SumCost computes the total estimated cost and priced-call count across ALL
