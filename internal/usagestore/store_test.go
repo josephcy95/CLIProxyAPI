@@ -115,6 +115,17 @@ func TestStoreInsertListSummaryAndPricing(t *testing.T) {
 	if len(accounts) == 0 || accounts[0].TotalCalls != 2 {
 		t.Fatalf("accounts = %#v", accounts)
 	}
+	if len(accounts[0].RecentRequests) != recentRequestBucketCount {
+		t.Fatalf("recent buckets = %d, want %d", len(accounts[0].RecentRequests), recentRequestBucketCount)
+	}
+	var recentSuccess, recentFailed int64
+	for _, bucket := range accounts[0].RecentRequests {
+		recentSuccess += bucket.Success
+		recentFailed += bucket.Failed
+	}
+	if recentSuccess != 1 || recentFailed != 1 {
+		t.Fatalf("recent request totals = success %d failed %d, want 1/1", recentSuccess, recentFailed)
+	}
 
 	apiKeys, err := store.GetAPIKeyStats(context.Background(), QueryFilter{}, 10)
 	if err != nil {
