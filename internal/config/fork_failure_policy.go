@@ -32,6 +32,8 @@ type CodexInstructionMarkersConfig struct {
 
 // CodexRoutingConfig configures account-tier-aware Codex credential selection.
 type CodexRoutingConfig struct {
+	// Strategy overrides the global routing strategy for Codex. Empty inherits the global strategy.
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 	// PreferFreeForSharedModels routes models supported by ready Free accounts to
 	// those accounts before using higher-tier credentials.
 	PreferFreeForSharedModels bool `yaml:"prefer-free-for-shared-models,omitempty" json:"prefer-free-for-shared-models,omitempty"`

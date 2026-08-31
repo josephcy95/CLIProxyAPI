@@ -144,6 +144,9 @@ func (m *Manager) setConfigSnapshotLocked(cfg *internalconfig.Config) bool {
 	}
 	m.runtimeConfig.Store(cfg)
 	m.syncSchedulerSelectionPolicy()
+	if m.scheduler != nil {
+		m.scheduler.setCodexRoutingStrategy(cfg.Codex.Routing.Strategy)
+	}
 	clearedCooldowns := m.clearDisabledCooldownStates(cfg)
 	if clearedCooldowns && oldCooldownStore != nil {
 		m.mu.Lock()
@@ -809,6 +812,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if result.AuthID == "" {
 		return
 	}
+	m.observeCodexAdaptiveResult(result)
 	modelKey := canonicalModelKey(result.Model)
 	stateLock := m.authStateLock(result.AuthID)
 	stateLock.Lock()
@@ -1139,6 +1143,7 @@ func (m *Manager) recordAvailabilityNeutralResult(ctx context.Context, result Re
 	if result.AuthID == "" {
 		return
 	}
+	m.observeCodexAdaptiveResult(result)
 
 	var authSnapshot *Auth
 	m.mu.Lock()

@@ -20,6 +20,7 @@ const (
 	schedulerStrategyRoundRobin         schedulerStrategy = 1
 	schedulerStrategyFillFirst          schedulerStrategy = 2
 	schedulerStrategyWeightedRoundRobin schedulerStrategy = 3
+	schedulerStrategyCodexAdaptive      schedulerStrategy = 4
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -45,6 +46,8 @@ type authScheduler struct {
 	codexRequireAuthAllow   bool
 	codexReserveMarkedAuths bool
 	codexPreferFreeAuths    bool
+	codexStrategy           schedulerStrategy
+	codexAdaptive           *codexAdaptiveRouter
 }
 
 // setCodexSelectionPolicy updates fork Codex selection gates used during picks.
@@ -158,10 +161,66 @@ func newAuthScheduler(selector Selector) *authScheduler {
 		authProviders:       make(map[string]string),
 		mixedCursors:        make(map[string]int),
 		mixedWeightedStates: make(map[string]*smoothWeightedState),
+		codexAdaptive:       newCodexAdaptiveRouter(),
 	}
 }
 
 // selectorStrategy maps a selector implementation to the scheduler semantics it should emulate.
+// setCodexRoutingStrategy updates the optional Codex-only routing override.
+func (s *authScheduler) setCodexRoutingStrategy(strategy string) {
+	if s == nil {
+		return
+	}
+	strategy = strings.ToLower(strings.TrimSpace(strategy))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strategy == codexAdaptiveStrategy {
+		s.codexStrategy = schedulerStrategyCodexAdaptive
+	} else {
+		s.codexStrategy = schedulerStrategyCurrent
+	}
+}
+
+func (s *authScheduler) codexAdaptiveEnabled() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	enabled := s.codexStrategy == schedulerStrategyCodexAdaptive
+	s.mu.Unlock()
+	return enabled
+}
+
+func (s *authScheduler) adaptiveAccount(authID string) codexAdaptiveAccount {
+	if s == nil || s.codexAdaptive == nil {
+		return codexAdaptiveAccount{limit: codexAdaptiveDefaultConcurrency}
+	}
+	return s.codexAdaptive.accountSnapshot(authID)
+}
+
+func (s *authScheduler) observeAdaptiveResult(result Result) {
+	if s == nil || s.codexAdaptive == nil {
+		return
+	}
+	s.codexAdaptive.observe(result)
+}
+
+func (s *authScheduler) releaseAdaptiveLease(options cliproxyexecutor.Options) {
+	if s != nil && s.codexAdaptive != nil {
+		s.codexAdaptive.releaseOptions(options)
+	}
+}
+
+func (s *authScheduler) beginAdaptiveQuotaProbe(authID string, now time.Time) bool {
+	return s != nil && s.codexAdaptive != nil && s.codexAdaptive.beginProbe(authID, now)
+}
+
+func (s *authScheduler) finishAdaptiveQuotaProbe(authID string, success bool) {
+	if s != nil && s.codexAdaptive != nil {
+		s.codexAdaptive.finishProbe(authID, success)
+	}
+}
+
 func selectorStrategy(selector Selector) schedulerStrategy {
 	switch selector.(type) {
 	case *FillFirstSelector:
@@ -244,7 +303,6 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	preferWebsocket := cliproxyexecutor.DownstreamWebsocket(ctx) && providerPrefersWebsocketTransport(providerKey) && pinnedAuthID == ""
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	eligibility.requireAuthAllow = s.codexRequireAuthAllow
 	eligibility.reserveMarkedAuths = s.codexReserveMarkedAuths
 	eligibility.preferFreeCodexAuths = s.codexPreferFreeAuths
@@ -253,18 +311,47 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	}
 	providerState := s.providers[providerKey]
 	if providerState == nil {
+		s.mu.Unlock()
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 	shard := providerState.ensureModelLocked(modelKey, time.Now())
 	if shard == nil {
+		s.mu.Unlock()
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
-	predicate = shard.preferFreeCodexPredicateLocked(providerKey, eligibility.preferFreeCodexAuths, predicate)
-	if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
-		return picked, nil
+	if providerKey == "codex" && s.codexStrategy == schedulerStrategyCodexAdaptive && pinnedAuthID == "" {
+		entries := shard.readyEntriesLocked(preferWebsocket, predicate)
+		if len(entries) == 0 {
+			errUnavailable := shard.unavailableErrorLocked(provider, model, predicate)
+			s.mu.Unlock()
+			return nil, errUnavailable
+		}
+		adaptive := s.codexAdaptive
+		s.mu.Unlock()
+		picked, leaseID, errPick := adaptive.pick(ctx, entries, eligibility.preferFreeCodexAuths)
+		if errPick != nil {
+			return nil, errPick
+		}
+		if picked != nil {
+			if opts.Metadata == nil {
+				adaptive.release(leaseID)
+			} else {
+				markAdaptiveLease(opts, leaseID)
+			}
+			return picked, nil
+		}
+		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+	} else {
+		predicate = shard.preferFreeCodexPredicateLocked(providerKey, eligibility.preferFreeCodexAuths, predicate)
+		if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
+			s.mu.Unlock()
+			return picked, nil
+		}
 	}
-	return nil, shard.unavailableErrorLocked(provider, model, predicate)
+	errUnavailable := shard.unavailableErrorLocked(provider, model, predicate)
+	s.mu.Unlock()
+	return nil, errUnavailable
 }
 
 func providerPrefersWebsocketTransport(providerKey string) bool {
@@ -802,6 +889,31 @@ func (m *modelScheduler) promoteExpiredLocked(now time.Time) {
 	if changed {
 		m.rebuildIndexesLocked()
 	}
+}
+
+func (m *modelScheduler) readyEntriesLocked(preferWebsocket bool, predicate func(*scheduledAuth) bool) []*Auth {
+	if m == nil {
+		return nil
+	}
+	m.promoteExpiredLocked(time.Now())
+	entries := make([]*Auth, 0, len(m.entries))
+	for _, priority := range m.priorityOrder {
+		bucket := m.readyByPriority[priority]
+		if bucket == nil {
+			continue
+		}
+		view := bucket.all
+		if preferWebsocket && len(bucket.ws.flat) > 0 {
+			view = bucket.ws
+		}
+		for _, entry := range view.flat {
+			if entry == nil || entry.auth == nil || (predicate != nil && !predicate(entry)) {
+				continue
+			}
+			entries = append(entries, entry.auth)
+		}
+	}
+	return entries
 }
 
 // pickReadyLocked selects the next ready auth from the highest available priority bucket.

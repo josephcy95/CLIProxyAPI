@@ -155,6 +155,7 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
+		defer m.releaseCodexAdaptiveLease(opts)
 		var failed bool
 		forward := true
 		var rewriter *StreamRewriter
@@ -261,12 +262,14 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		var errIntercept error
 		execReq, execOpts, errIntercept = applyRequestAfterAuthInterceptor(ctx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
 		if errIntercept != nil {
+			m.releaseCodexAdaptiveLease(opts)
 			return nil, errIntercept
 		}
 		if executionModel == "" {
 			execReq = attachResolvedAPIKeyModelInfo(routing, execReq, auth, routeModel, execModel)
 		}
 		if errCtx := ctx.Err(); errCtx != nil {
+			m.releaseCodexAdaptiveLease(opts)
 			return nil, errCtx
 		}
 		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, execOpts)
@@ -296,6 +299,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					streamResult, errStream = executor.ExecuteStream(ctx, auth, execReq, execOpts)
 					if errStream != nil {
 						if errCtx := ctx.Err(); errCtx != nil {
+							m.releaseCodexAdaptiveLease(opts)
 							return nil, errCtx
 						}
 					}
@@ -304,6 +308,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		}
 		if !ephemeralResult {
 			if errCancel := claudeOAuthRequestCancellation(ctx, auth, errStream); errCancel != nil {
+				m.releaseCodexAdaptiveLease(opts)
 				return nil, errCancel
 			}
 		}
@@ -342,6 +347,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		if bootstrapErr != nil {
 			if errCtx := ctx.Err(); errCtx != nil {
 				discardStreamChunks(streamResult.Chunks)
+				m.releaseCodexAdaptiveLease(opts)
 				return nil, errCtx
 			}
 			if allowRetry {
@@ -370,6 +376,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					retryStream, retryErr = validateStreamResult(retryStream, retryErr)
 					if retryErr != nil {
 						if errCtx := ctx.Err(); errCtx != nil {
+							m.releaseCodexAdaptiveLease(opts)
 							return nil, errCtx
 						}
 						bootstrapErr = retryErr
@@ -384,6 +391,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		if !ephemeralResult {
 			if errCancel := claudeOAuthRequestCancellation(ctx, auth, bootstrapErr); errCancel != nil {
 				discardStreamChunks(streamResult.Chunks)
+				m.releaseCodexAdaptiveLease(opts)
 				return nil, errCancel
 			}
 		}
