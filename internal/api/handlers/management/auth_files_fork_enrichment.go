@@ -143,6 +143,14 @@ func authCodexQuotaSnapshot(auth *coreauth.Auth) gin.H {
 	} else if until := authMetadataValue(auth, "subscription_active_until"); until != nil {
 		out["chatgpt_subscription_active_until"] = until
 	}
+	for key, value := range auth.Quota.Signals {
+		if strings.HasPrefix(key, "X-Codex-") && strings.TrimSpace(value) != "" {
+			out[key] = value
+		}
+	}
+	if !auth.Quota.ObservedAt.IsZero() {
+		out["codex_quota_observed_at"] = auth.Quota.ObservedAt
+	}
 	if len(out) == 0 {
 		return nil
 	}
