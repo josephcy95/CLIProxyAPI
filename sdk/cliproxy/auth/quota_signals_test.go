@@ -43,6 +43,33 @@ func TestQuotaStateObserveResponseHeadersKeepsProviderScopedSignals(t *testing.T
 	}
 }
 
+func TestQuotaStateObserveResponseHeadersPreservesOmittedCodexWindow(t *testing.T) {
+	var quota QuotaState
+	if !quota.ObserveResponseHeadersForProvider("codex", http.Header{
+		"X-Codex-Primary-Used-Percent":          []string{"10"},
+		"X-Codex-Primary-Window-Minutes":        []string{"300"},
+		"X-Codex-Primary-Reset-After-Seconds":   []string{"3600"},
+		"X-Codex-Secondary-Used-Percent":        []string{"20"},
+		"X-Codex-Secondary-Window-Minutes":      []string{"10080"},
+		"X-Codex-Secondary-Reset-After-Seconds": []string{"604800"},
+	}, time.Unix(100, 0)) {
+		t.Fatal("initial Codex observation reported no change")
+	}
+	if !quota.ObserveResponseHeadersForProvider("codex", http.Header{
+		"X-Codex-Primary-Used-Percent":        []string{"11"},
+		"X-Codex-Primary-Window-Minutes":      []string{"300"},
+		"X-Codex-Primary-Reset-After-Seconds": []string{"3500"},
+	}, time.Unix(200, 0)) {
+		t.Fatal("partial Codex observation reported no change")
+	}
+	if got := quota.Signals["X-Codex-Secondary-Used-Percent"]; got != "20" {
+		t.Fatalf("omitted weekly window was lost: got %q", got)
+	}
+	if got := quota.Signals["X-Codex-Primary-Used-Percent"]; got != "11" {
+		t.Fatalf("primary window was not updated: got %q", got)
+	}
+}
+
 func TestQuotaStateObserveResponseHeadersBoundsAndCanonicalizesValues(t *testing.T) {
 	var quota QuotaState
 	longValue := strings.Repeat("x", maxQuotaSignalValue+1)

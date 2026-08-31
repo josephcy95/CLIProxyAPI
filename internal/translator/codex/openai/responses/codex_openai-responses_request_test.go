@@ -239,6 +239,16 @@ func TestConvertOpenAIResponsesRequestToCodexReusesNormalizedPayload(t *testing.
 	}
 }
 
+func TestConvertOpenAIResponsesRequestToCodexNormalizesFastServiceTier(t *testing.T) {
+	inputJSON := []byte(`{"model":"gpt-5.6","service_tier":"fast","input":"hello"}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.6", inputJSON, true)
+
+	if tier := gjson.GetBytes(output, "service_tier").String(); tier != "priority" {
+		t.Fatalf("service_tier = %q, want priority", tier)
+	}
+}
+
 func TestConvertOpenAIResponsesRequestToCodexNormalizesRequiredFields(t *testing.T) {
 	inputJSON := []byte(`{
 		"model":"gpt-5.6",
