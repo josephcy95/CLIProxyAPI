@@ -31,6 +31,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
 		mgmt.GET("/latest-version", s.mgmt.GetLatestVersion)
+		mgmt.POST("/management-html/install", s.installLatestManagementHTML)
 		mgmt.GET("/plugins", s.mgmt.ListPlugins)
 		mgmt.GET("/plugin-store", s.mgmt.ListPluginStore)
 		mgmt.POST("/plugin-store/:id/install", s.mgmt.InstallPluginFromStore)
@@ -327,6 +328,27 @@ func (s *Server) pluginResourceNoRoute(c *gin.Context) {
 		return
 	}
 	c.AbortWithStatus(http.StatusNotFound)
+}
+
+func (s *Server) installLatestManagementHTML(c *gin.Context) {
+	cfg := s.cfg
+	if cfg == nil || cfg.Home.Enabled || cfg.RemoteManagement.DisableControlPanel {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	if err := managementasset.InstallLatestManagementHTML(
+		c.Request.Context(),
+		managementasset.StaticDir(s.configFilePath),
+		cfg.ProxyURL,
+		cfg.RemoteManagement.PanelGitHubRepository,
+	); err != nil {
+		log.WithError(err).Warn("failed to install latest management asset")
+		c.JSON(http.StatusBadGateway, gin.H{"error": "management asset install failed", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (s *Server) serveManagementControlPanel(c *gin.Context) {
