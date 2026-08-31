@@ -118,7 +118,7 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth) (*Auth, error
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
+	setCodexAdaptiveQuotaHeaders(req, auth, false)
 	resp, err := executor.HttpRequest(ctx, auth, req)
 	if err != nil {
 		return nil, err
@@ -210,6 +210,24 @@ func codexMetadataResetCreditCount(metadata map[string]any) int {
 	return 0
 }
 
+func setCodexAdaptiveQuotaHeaders(req *http.Request, auth *Auth, resetCredits bool) {
+	if req == nil {
+		return
+	}
+	req.Header.Set("Accept", "application/json")
+	if auth != nil && auth.Metadata != nil {
+		if accountID, ok := auth.Metadata["account_id"].(string); ok {
+			if accountID = strings.TrimSpace(accountID); accountID != "" {
+				req.Header.Set("ChatGPT-Account-ID", accountID)
+			}
+		}
+	}
+	if resetCredits {
+		req.Header.Set("OpenAI-Beta", "codex-1")
+		req.Header.Set("Originator", "Codex Desktop")
+	}
+}
+
 func (m *Manager) probeCodexResetCredits(ctx context.Context, auth *Auth) (map[string]any, error) {
 	executor, ok := m.Executor("codex")
 	if !ok || executor == nil {
@@ -219,7 +237,7 @@ func (m *Manager) probeCodexResetCredits(ctx context.Context, auth *Auth) (map[s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
+	setCodexAdaptiveQuotaHeaders(req, auth, true)
 	resp, err := executor.HttpRequest(ctx, auth, req)
 	if err != nil {
 		return nil, err

@@ -277,11 +277,15 @@ func TestCodexAdaptiveQuotaProbeIsLazyAndPaidOnly(t *testing.T) {
 
 type adaptiveResetCreditProbeExecutor struct {
 	schedulerTestExecutor
+	requests chan *http.Request
 }
 
 func (adaptiveResetCreditProbeExecutor) Identifier() string { return "codex" }
 
-func (adaptiveResetCreditProbeExecutor) HttpRequest(_ context.Context, _ *Auth, req *http.Request) (*http.Response, error) {
+func (e adaptiveResetCreditProbeExecutor) HttpRequest(_ context.Context, _ *Auth, req *http.Request) (*http.Response, error) {
+	if e.requests != nil {
+		e.requests <- req.Clone(req.Context())
+	}
 	body := `{"rate_limits":{"secondary":{"used_percent":63,"window_minutes":10080,"reset_after_seconds":3600}}}`
 	if strings.HasSuffix(req.URL.Path, "/rate-limit-reset-credits") {
 		body = `{"credits":[{"status":"available","expires_at":"2099-01-01T00:00:00Z"}],"available_count":1}`
@@ -295,11 +299,19 @@ func (adaptiveResetCreditProbeExecutor) HttpRequest(_ context.Context, _ *Auth, 
 
 func TestCodexQuotaProbeInitializesMetadataBeforeMergingResetCredits(t *testing.T) {
 	manager := NewManager(nil, &RoundRobinSelector{}, nil)
-	manager.RegisterExecutor(adaptiveResetCreditProbeExecutor{schedulerTestExecutor: schedulerTestExecutor{provider: "codex"}})
+	requests := make(chan *http.Request, 2)
+	manager.RegisterExecutor(adaptiveResetCreditProbeExecutor{
+		schedulerTestExecutor: schedulerTestExecutor{provider: "codex"},
+		requests:              requests,
+	})
 	auth := &Auth{
 		ID:       "adaptive-reset-credit-map",
 		Provider: "codex",
-		Metadata: map[string]any{"rate_limit_reset_credits_applicable_available_count": 1, "rate_limit_reset_credits": []any{map[string]any{"status": "available"}}},
+		Metadata: map[string]any{
+			"account_id": "acct-adaptive",
+			"rate_limit_reset_credits_applicable_available_count": 1,
+			"rate_limit_reset_credits":                            []any{map[string]any{"status": "available"}},
+		},
 	}
 	if _, err := manager.Register(context.Background(), auth); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -311,6 +323,20 @@ func TestCodexQuotaProbeInitializesMetadataBeforeMergingResetCredits(t *testing.
 	}
 	if updated == nil || updated.Metadata["rate_limit_reset_credits_available_count"] != int64(1) {
 		t.Fatalf("reset-credit metadata was not merged: %#v", updated)
+	}
+	usageRequest := <-requests
+	if got := usageRequest.Header.Get("ChatGPT-Account-ID"); got != "acct-adaptive" {
+		t.Fatalf("usage probe account header = %q, want acct-adaptive", got)
+	}
+	if usageRequest.Header.Get("OpenAI-Beta") != "" || usageRequest.Header.Get("Originator") != "" {
+		t.Fatal("usage probe unexpectedly sent reset-credit headers")
+	}
+	resetRequest := <-requests
+	if got := resetRequest.Header.Get("ChatGPT-Account-ID"); got != "acct-adaptive" {
+		t.Fatalf("reset-credit probe account header = %q, want acct-adaptive", got)
+	}
+	if resetRequest.Header.Get("OpenAI-Beta") != "codex-1" || resetRequest.Header.Get("Originator") != "Codex Desktop" {
+		t.Fatalf("reset-credit probe headers = %#v", resetRequest.Header)
 	}
 }
 
