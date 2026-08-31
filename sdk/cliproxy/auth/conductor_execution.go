@@ -326,6 +326,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 
 		models, pooled, aliasResult, routing := m.preparedExecutionModelsWithAlias(auth, routeModel)
 		if len(models) == 0 {
+			m.releaseCodexAdaptiveLease(pickOpts)
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
@@ -333,6 +334,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errPrepare); errCancel != nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare), Options: pickOpts}
@@ -354,6 +356,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			var errIntercept error
 			execReq, execOpts, errIntercept = applyRequestAfterAuthInterceptor(execCtx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
 			if errIntercept != nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
 				return cliproxyexecutor.Response{}, errIntercept
 			}
 			if !restoreExecutionModel {
@@ -362,6 +365,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
+					m.releaseCodexAdaptiveLease(pickOpts)
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				refreshCtx := newUpstreamAttemptContext(execCtx)
@@ -372,12 +376,14 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					resp, errExec = executor.Execute(execCtx, auth, execReq, execOpts)
 					if errExec != nil {
 						if errCtx := execCtx.Err(); errCtx != nil {
+							m.releaseCodexAdaptiveLease(pickOpts)
 							return cliproxyexecutor.Response{}, errCtx
 						}
 					}
 				}
 			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil, Options: execOpts}
@@ -490,6 +496,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 
 		models, pooled, aliasResult, routing := m.preparedExecutionModelsWithAlias(auth, routeModel)
 		if len(models) == 0 {
+			m.releaseCodexAdaptiveLease(pickOpts)
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
@@ -497,6 +504,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errPrepare); errCancel != nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare), Options: pickOpts, SkipQuotaObservation: true}
@@ -518,6 +526,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			var errIntercept error
 			execReq, execOpts, errIntercept = applyRequestAfterAuthInterceptor(execCtx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
 			if errIntercept != nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
 				return cliproxyexecutor.Response{}, errIntercept
 			}
 			if !restoreExecutionModel {
@@ -526,6 +535,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			resp, errExec := executor.CountTokens(execCtx, auth, execReq, execOpts)
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
+					m.releaseCodexAdaptiveLease(pickOpts)
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				refreshCtx := newUpstreamAttemptContext(execCtx)
@@ -536,12 +546,14 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 					resp, errExec = executor.CountTokens(execCtx, auth, execReq, execOpts)
 					if errExec != nil {
 						if errCtx := execCtx.Err(); errCtx != nil {
+							m.releaseCodexAdaptiveLease(pickOpts)
 							return cliproxyexecutor.Response{}, errCtx
 						}
 					}
 				}
 			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
 				return cliproxyexecutor.Response{}, errCancel
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil, Options: execOpts, SkipQuotaObservation: true}
@@ -708,6 +720,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			aliasResult.OriginalAlias = responseAlias
 		}
 		if len(models) == 0 {
+			if selection == nil {
+				m.releaseCodexAdaptiveLease(pickOpts)
+			}
 			if selection != nil {
 				releaseAttempt()
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "no_execution_models"); errEnd != nil {

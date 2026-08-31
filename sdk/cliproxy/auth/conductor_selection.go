@@ -1381,6 +1381,9 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 	if !okExecutor {
 		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
+	if strings.EqualFold(strings.TrimSpace(provider), "codex") && m.codexAdaptiveEnabled() {
+		m.refreshCodexAdaptiveQuota(ctx, model, opts, tried)
+	}
 	selected, errPick := m.scheduler.pickSingle(ctx, provider, model, opts, tried)
 	if errPick != nil && model != "" && shouldRetrySchedulerPick(errPick) {
 		m.syncScheduler()
@@ -1573,6 +1576,9 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 		m.mu.RUnlock()
 	}
 
+	if len(eligibleProviders) == 1 && eligibleProviders[0] == "codex" && m.codexAdaptiveEnabled() {
+		m.refreshCodexAdaptiveQuota(ctx, model, opts, tried)
+	}
 	selected, providerKey, errPick := m.scheduler.pickMixed(ctx, eligibleProviders, model, opts, tried)
 	if errPick != nil && model != "" && shouldRetrySchedulerPick(errPick) {
 		m.syncScheduler()

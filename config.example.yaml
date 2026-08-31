@@ -259,6 +259,9 @@ codex:
   # Higher-tier accounts remain automatic fallback for unavailable Free accounts
   # and are used directly for models that Free accounts do not support.
   routing:
+    # Empty inherits the global routing.strategy. Set to adaptive to opt in to
+    # Codex-only priority/quota-aware routing with per-account concurrency protection.
+    strategy: ""
     prefer-free-for-shared-models: false
   # When true, and routing.strategy is fill-first or routing.session-affinity is true,
   # remap Codex prompt_cache_key and installation identity per selected auth.

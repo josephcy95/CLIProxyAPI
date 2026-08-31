@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -30,6 +31,13 @@ func TestListAuthFiles_IncludesStoredCodexQuotaSnapshot(t *testing.T) {
 		Attributes: map[string]string{
 			"path": filePath,
 		},
+		Quota: coreauth.QuotaState{
+			ObservedAt: time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC),
+			Signals: map[string]string{
+				"X-Codex-Secondary-Used-Percent":   "63",
+				"X-Codex-Secondary-Window-Minutes": "10080",
+			},
+		},
 		Metadata: map[string]any{
 			"type":                              "codex",
 			"chatgpt_subscription_active_until": "2026-09-12T08:00:00Z",
@@ -54,6 +62,12 @@ func TestListAuthFiles_IncludesStoredCodexQuotaSnapshot(t *testing.T) {
 	h.tokenStore = &memoryAuthStore{}
 
 	entry := firstAuthFileEntry(t, h)
+	if got := entry["X-Codex-Secondary-Used-Percent"]; got != "63" {
+		t.Fatalf("unexpected quota used percent %#v", got)
+	}
+	if _, ok := entry["codex_quota_observed_at"]; !ok {
+		t.Fatal("expected codex quota observed timestamp")
+	}
 	if got := entry["chatgpt_subscription_active_until"]; got != "2026-09-12T08:00:00Z" {
 		t.Fatalf("unexpected chatgpt_subscription_active_until %#v", got)
 	}
