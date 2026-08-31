@@ -6,6 +6,8 @@ package management
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -96,28 +98,6 @@ func jsonWholeNumber(value float64) any {
 	return value
 }
 
-func authMetadataSlice(auth *coreauth.Auth, key string) ([]any, bool) {
-	if auth == nil || auth.Metadata == nil {
-		return nil, false
-	}
-	raw, ok := auth.Metadata[key]
-	if !ok || raw == nil {
-		return nil, false
-	}
-	switch value := raw.(type) {
-	case []any:
-		return value, true
-	case []map[string]any:
-		out := make([]any, 0, len(value))
-		for _, item := range value {
-			out = append(out, item)
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
 // authCodexQuotaSnapshot copies persisted Codex subscription / reset-credit
 // fields onto the management list DTO. Latest upstream values are stored on
 // the auth file via PATCH and always replace the previous snapshot.
@@ -125,24 +105,7 @@ func authCodexQuotaSnapshot(auth *coreauth.Auth) gin.H {
 	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return nil
 	}
-	out := gin.H{}
-	if count, ok := authMetadataNumber(auth, "rate_limit_reset_credits_available_count"); ok {
-		out["rate_limit_reset_credits_available_count"] = jsonWholeNumber(count)
-	}
-	if count, ok := authMetadataNumber(auth, "rate_limit_reset_credits_applicable_available_count"); ok {
-		out["rate_limit_reset_credits_applicable_available_count"] = jsonWholeNumber(count)
-	}
-	if credits, ok := authMetadataSlice(auth, "rate_limit_reset_credits"); ok {
-		out["rate_limit_reset_credits"] = credits
-	}
-	if checkedAt := authMetadataString(auth, "rate_limit_reset_credits_checked_at"); checkedAt != "" {
-		out["rate_limit_reset_credits_checked_at"] = checkedAt
-	}
-	if until := authMetadataValue(auth, "chatgpt_subscription_active_until"); until != nil {
-		out["chatgpt_subscription_active_until"] = until
-	} else if until := authMetadataValue(auth, "subscription_active_until"); until != nil {
-		out["chatgpt_subscription_active_until"] = until
-	}
+	out := authCodexQuotaSnapshotFromMetadata(coreauth.FlattenPersistedCodexQuotaMetadata(auth.Metadata))
 	for key, value := range auth.Quota.Signals {
 		if strings.HasPrefix(key, "X-Codex-") && strings.TrimSpace(value) != "" {
 			out[key] = value
@@ -155,6 +118,82 @@ func authCodexQuotaSnapshot(auth *coreauth.Auth) gin.H {
 		return nil
 	}
 	return out
+}
+
+func authCodexQuotaSnapshotFromMetadata(metadata map[string]any) gin.H {
+	out := gin.H{}
+	if metadata == nil {
+		return out
+	}
+	view := &coreauth.Auth{Metadata: metadata}
+	if count, ok := authMetadataNumber(view, "rate_limit_reset_credits_available_count"); ok {
+		out["rate_limit_reset_credits_available_count"] = jsonWholeNumber(count)
+	}
+	if count, ok := authMetadataNumber(view, "rate_limit_reset_credits_applicable_available_count"); ok {
+		out["rate_limit_reset_credits_applicable_available_count"] = jsonWholeNumber(count)
+	}
+	if credits := authMetadataValue(view, "rate_limit_reset_credits"); credits != nil {
+		switch value := credits.(type) {
+		case []any, []map[string]any, map[string]any:
+			out["rate_limit_reset_credits"] = value
+			if summary, ok := value.(map[string]any); ok {
+				if _, exists := out["rate_limit_reset_credits_available_count"]; !exists {
+					if count, ok := authMetadataNumber(&coreauth.Auth{Metadata: summary}, "available_count"); ok {
+						out["rate_limit_reset_credits_available_count"] = jsonWholeNumber(count)
+					}
+				}
+				if _, exists := out["rate_limit_reset_credits_applicable_available_count"]; !exists {
+					if count, ok := authMetadataNumber(&coreauth.Auth{Metadata: summary}, "applicable_available_count"); ok {
+						out["rate_limit_reset_credits_applicable_available_count"] = jsonWholeNumber(count)
+					}
+				}
+			}
+		}
+	}
+	if checkedAt := authMetadataString(view, "rate_limit_reset_credits_checked_at"); checkedAt != "" {
+		out["rate_limit_reset_credits_checked_at"] = checkedAt
+	}
+	for _, key := range []string{
+		"plan_type",
+		"chatgpt_plan_type",
+		"plan_checked_at",
+		"chatgpt_subscription_active_until",
+		"subscription_active_until",
+		"expired",
+		"expires_at",
+		"expires",
+	} {
+		if value := authMetadataValue(view, key); value != nil {
+			out[key] = value
+		}
+	}
+	for key, value := range metadata {
+		if strings.HasPrefix(key, "X-Codex-") {
+			if text := strings.TrimSpace(fmt.Sprint(value)); text != "" {
+				out[key] = text
+			}
+		}
+	}
+	if observedAt := authMetadataValue(view, "codex_quota_observed_at"); observedAt != nil {
+		out["codex_quota_observed_at"] = observedAt
+	}
+	return out
+}
+
+func authCodexQuotaSnapshotFromFile(path string) gin.H {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	data, errRead := os.ReadFile(path)
+	if errRead != nil {
+		return nil
+	}
+	var raw map[string]any
+	if errDecode := json.Unmarshal(data, &raw); errDecode != nil {
+		return nil
+	}
+	return authCodexQuotaSnapshotFromMetadata(coreauth.FlattenPersistedCodexQuotaMetadata(raw))
 }
 
 func xaiAuthStatus(auth *coreauth.Auth, now time.Time) (int, time.Time) {

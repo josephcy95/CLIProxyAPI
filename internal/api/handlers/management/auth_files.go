@@ -100,13 +100,14 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 	}
 	nameFilter := strings.TrimSpace(c.Query("name"))
 	authIndexFilter := strings.TrimSpace(c.Query("auth_index"))
+	adaptiveSnapshot := h.authManager.CodexAdaptiveSnapshot()
 	auths := h.authManager.List()
 	files := make([]gin.H, 0, len(auths))
 	for _, auth := range auths {
 		if !matchesAuthFileLookup(auth, nameFilter, authIndexFilter) {
 			continue
 		}
-		if entry := h.buildAuthFileEntry(auth); entry != nil {
+		if entry := h.buildAuthFileEntryWithAdaptive(auth, adaptiveSnapshot); entry != nil {
 			files = append(files, entry)
 		}
 	}
@@ -317,9 +318,19 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 }
 
 func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
+	return h.buildAuthFileEntryWithAdaptive(auth, nil)
+}
+
+func (h *Handler) buildAuthFileEntryWithAdaptive(auth *coreauth.Auth, adaptive map[string]coreauth.CodexAdaptiveCandidateInfo) gin.H {
 	authFileEntryMu.Lock()
 	defer authFileEntryMu.Unlock()
-	return h.buildAuthFileEntryLocked(auth)
+	entry := h.buildAuthFileEntryLocked(auth)
+	if entry != nil && adaptive != nil && auth != nil {
+		if info, ok := adaptive[auth.ID]; ok {
+			entry["codex_adaptive"] = info
+		}
+	}
+	return entry
 }
 
 func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
@@ -416,6 +427,13 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 		}
 		if snapshot := authCodexQuotaSnapshot(auth); len(snapshot) > 0 {
 			for key, value := range snapshot {
+				entry[key] = value
+			}
+		}
+		// The auth JSON is the durable source shown by the management UI. This is
+		// a local file read only; it never queries ChatGPT.
+		if diskSnapshot := authCodexQuotaSnapshotFromFile(path); len(diskSnapshot) > 0 {
+			for key, value := range diskSnapshot {
 				entry[key] = value
 			}
 		}

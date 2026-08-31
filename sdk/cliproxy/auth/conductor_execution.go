@@ -352,7 +352,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			if restoreExecutionModel {
 				execReq.Model = executionModel
 			}
-			execOpts := opts
+			execOpts := pickOpts
 			var errIntercept error
 			execReq, execOpts, errIntercept = applyRequestAfterAuthInterceptor(execCtx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
 			if errIntercept != nil {
@@ -522,7 +522,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			if restoreExecutionModel {
 				execReq.Model = executionModel
 			}
-			execOpts := opts
+			execOpts := pickOpts
 			var errIntercept error
 			execReq, execOpts, errIntercept = applyRequestAfterAuthInterceptor(execCtx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
 			if errIntercept != nil {
@@ -764,7 +764,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		if restoreExecutionModel {
 			streamExecutionModel = executionModel
 		}
-		execOpts := opts
+		execOpts := pickOpts
 		if selection != nil {
 			execOpts.ExecutionLifecycle = selection
 		}
@@ -1164,13 +1164,17 @@ func disallowFreeAuthFromMetadata(meta map[string]any) bool {
 }
 
 func isFreeCodexAuth(auth *Auth) bool {
-	if auth == nil || auth.Attributes == nil {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
-		return false
+	planType := ""
+	if auth.Attributes != nil {
+		planType = auth.Attributes["plan_type"]
 	}
-	return strings.EqualFold(strings.TrimSpace(auth.Attributes["plan_type"]), "free")
+	if strings.TrimSpace(planType) == "" {
+		planType = metadataString(auth, "plan_type", "chatgpt_plan_type")
+	}
+	return strings.EqualFold(strings.TrimSpace(planType), "free")
 }
 
 func publishSelectedAuthMetadata(meta map[string]any, auth *Auth) {

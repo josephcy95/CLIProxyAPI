@@ -70,6 +70,7 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 		return nil, nil
 	}
 	NormalizeCredentialMetadata(auth.Metadata)
+	hydrateQuotaObservationFromMetadata(auth)
 	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 		return nil, fmt.Errorf("register auth: %w", errWeight)
 	}
@@ -113,6 +114,7 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		return nil, nil
 	}
 	NormalizeCredentialMetadata(auth.Metadata)
+	hydrateQuotaObservationFromMetadata(auth)
 	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 		return nil, fmt.Errorf("update auth: %w", errWeight)
 	}
@@ -250,6 +252,7 @@ func (m *Manager) Load(ctx context.Context) error {
 			continue
 		}
 		NormalizeCredentialMetadata(auth.Metadata)
+		hydrateQuotaObservationFromMetadata(auth)
 		if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 			continue
 		}
@@ -275,6 +278,10 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if m.store == nil || auth == nil {
 		return nil
 	}
+	if persisted := readPersistedCodexQuotaMetadata(auth); persisted != nil {
+		applyPersistedCodexQuotaMetadata(auth, persisted)
+	}
+	syncQuotaObservationMetadata(auth)
 	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 		return fmt.Errorf("persist auth: %w", errWeight)
 	}

@@ -334,10 +334,9 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 			return nil, errPick
 		}
 		if picked != nil {
-			if opts.Metadata == nil {
+			if !markAdaptiveLease(opts, leaseID) {
 				adaptive.release(leaseID)
-			} else {
-				markAdaptiveLease(opts, leaseID)
+				return nil, &Error{Code: "auth_not_found", Message: "adaptive routing requires request metadata"}
 			}
 			return picked, nil
 		}
