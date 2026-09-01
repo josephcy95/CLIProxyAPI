@@ -919,7 +919,13 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							result.Error.HTTPStatus = http.StatusTooManyRequests
 						}
 					}
-					if isModelSupportResultError(result.Error) {
+					if isCodexModelSupportResultError(result) {
+						// This is a caller/harness mismatch, not an auth or quota failure.
+						// Do not poison the model for a later request using the right harness.
+						state.Unavailable = false
+						state.Status = StatusActive
+						state.NextRetryAfter = time.Time{}
+					} else if isModelSupportResultError(result.Error) {
 						next := now.Add(12 * time.Hour)
 						state.NextRetryAfter = next
 						suspendReason = "model_not_supported"
@@ -1707,6 +1713,11 @@ func isInvalidGrantResultError(err *Error) bool {
 		return false
 	}
 	return isInvalidGrantErrorMessage(err.Code) || isInvalidGrantErrorMessage(err.Message)
+}
+
+func isCodexModelSupportResultError(result Result) bool {
+	return strings.EqualFold(strings.TrimSpace(result.Provider), "codex") &&
+		isModelSupportResultError(result.Error)
 }
 
 func isModelSupportResultError(err *Error) bool {
