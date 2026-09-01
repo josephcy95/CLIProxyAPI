@@ -32,6 +32,40 @@ func quotaResult(authID, model string) Result {
 	}
 }
 
+func TestMarkResultCodexModelHarnessMismatchDoesNotCooldownModel(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	auth := &Auth{ID: "auth-harness-mismatch", Provider: "codex"}
+	if _, errRegister := manager.Register(WithSkipPersist(context.Background()), auth); errRegister != nil {
+		t.Fatalf("Register returned error: %v", errRegister)
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "codex",
+		Model:    "gpt-5.6-sol",
+		Error: &Error{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "unsupported_value",
+			Message:    "This model is not supported when using X-OpenAI-Internal-Codex-Responses-Lite.",
+		},
+	})
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("auth not found after result")
+	}
+	state := updated.ModelStates["gpt-5.6-sol"]
+	if state == nil {
+		t.Fatal("expected model state")
+	}
+	if state.Unavailable || !state.NextRetryAfter.IsZero() {
+		t.Fatalf("harness mismatch created cooldown: unavailable=%v retry=%v", state.Unavailable, state.NextRetryAfter)
+	}
+	if blocked, _, _ := isAuthBlockedForModel(updated, "gpt-5.6-sol", time.Now()); blocked {
+		t.Fatal("harness mismatch removed the auth from model candidates")
+	}
+}
+
 func TestMarkResultQuotaBackoffEscalatesOncePerWindow(t *testing.T) {
 	withQuotaCooldownEnabled(t)
 

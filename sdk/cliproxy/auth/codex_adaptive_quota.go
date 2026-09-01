@@ -32,6 +32,7 @@ func (m *Manager) refreshCodexAdaptiveQuota(ctx context.Context, model string, o
 	if m == nil || !m.codexAdaptiveEnabled() {
 		return
 	}
+	m.syncPersistedCodexQuotaSnapshots()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -77,7 +78,7 @@ func (m *Manager) refreshCodexAdaptiveQuota(ctx context.Context, model string, o
 		if state.inFlight >= state.limit || !quotaProbeNeeded(auth, &state, now) {
 			continue
 		}
-		if candidate == nil || adaptiveScoreFor(auth, &state, now).betterThan(adaptiveScoreFor(candidate, &candidateState, now)) {
+		if candidate == nil || adaptiveScoreFor(auth, state, now).betterThan(adaptiveScoreFor(candidate, candidateState, now)) {
 			candidate = auth.Clone()
 			candidateState = state
 		}
@@ -188,26 +189,7 @@ func (m *Manager) probeCodexQuota(ctx context.Context, auth *Auth) (*Auth, error
 }
 
 func codexMetadataResetCreditCount(metadata map[string]any) int {
-	for _, key := range []string{
-		"rate_limit_reset_credits_applicable_available_count",
-		"rate_limit_reset_credits_available_count",
-	} {
-		switch value := metadata[key].(type) {
-		case int:
-			if value > 0 {
-				return value
-			}
-		case int64:
-			if value > 0 {
-				return int(value)
-			}
-		case float64:
-			if value > 0 {
-				return int(value)
-			}
-		}
-	}
-	return 0
+	return codexAvailableResetCreditsFromMetadata(metadata, time.Now())
 }
 
 func setCodexAdaptiveQuotaHeaders(req *http.Request, auth *Auth, resetCredits bool) {
