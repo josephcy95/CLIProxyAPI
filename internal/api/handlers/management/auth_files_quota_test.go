@@ -1,9 +1,12 @@
 package management
 
 import (
+	"context"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
@@ -64,5 +67,45 @@ func TestQuotaObservationPayloadExcludesCooldownState(t *testing.T) {
 	}
 	if _, ok := payload["backoff_level"]; ok {
 		t.Fatalf("cooldown backoff leaked: %#v", payload)
+	}
+}
+
+func TestListAuthFiles_ExposesModelCooldownAsNextRetryAfter(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	authDir := t.TempDir()
+	filePath := authDir + "/codex-user.json"
+	if errWrite := os.WriteFile(filePath, []byte(`{"type":"codex"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write auth file: %v", errWrite)
+	}
+
+	nextRetryAfter := time.Now().Add(30 * time.Minute).Round(0)
+	manager := coreauth.NewManager(nil, nil, nil)
+	record := &coreauth.Auth{
+		ID:       "codex-user.json",
+		FileName: "codex-user.json",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"path": filePath,
+		},
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-5.6-sol": {NextRetryAfter: nextRetryAfter},
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+	h.tokenStore = &memoryAuthStore{}
+	entry := firstAuthFileEntry(t, h)
+	got, ok := entry["next_retry_after"].(string)
+	if !ok {
+		t.Fatalf("expected next_retry_after string, got %#v", entry["next_retry_after"])
+	}
+	parsed, errParse := time.Parse(time.RFC3339Nano, got)
+	if errParse != nil || !parsed.Equal(nextRetryAfter) {
+		t.Fatalf("next_retry_after = %q (%v), want %v", got, errParse, nextRetryAfter)
 	}
 }

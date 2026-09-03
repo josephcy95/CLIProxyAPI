@@ -396,8 +396,16 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 	if !auth.LastRefreshedAt.IsZero() {
 		entry["last_refresh"] = auth.LastRefreshedAt
 	}
-	if !auth.NextRetryAfter.IsZero() {
-		entry["next_retry_after"] = auth.NextRetryAfter
+	now := time.Now()
+	nextRetryAfter := auth.NextRetryAfter
+	for _, state := range auth.ModelStates {
+		if state != nil && state.NextRetryAfter.After(now) &&
+			(nextRetryAfter.IsZero() || state.NextRetryAfter.Before(nextRetryAfter)) {
+			nextRetryAfter = state.NextRetryAfter
+		}
+	}
+	if !nextRetryAfter.IsZero() {
+		entry["next_retry_after"] = nextRetryAfter
 	}
 	if path != "" {
 		entry["path"] = path
@@ -439,7 +447,7 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(auth.Provider), "xai") {
-		if statusCode, cooldownUntil := xaiAuthStatus(auth, time.Now()); statusCode > 0 || !cooldownUntil.IsZero() {
+		if statusCode, cooldownUntil := xaiAuthStatus(auth, now); statusCode > 0 || !cooldownUntil.IsZero() {
 			if statusCode > 0 {
 				entry["xai_last_error_status"] = statusCode
 			}
