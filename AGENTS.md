@@ -18,6 +18,14 @@ This fork exists for **custom behavior**. Upstream is for bug fixes and additive
 - `--no-commit` still applies every clean upstream change to the index; it only pauses before creating the commit. Automatic merges require the same semantic review as textual conflicts.
 - Do not create the merge commit until every resulting API change has passed the fork-preservation gate below. After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
 
+### Sync intent: upstream protocol authority
+
+When the user says “sync with upstream”, interpret it as a real merge where upstream is the authority for provider/client protocol behavior. The upstream maintainer tracks current client wire behavior more closely; prefer upstream implementations for Codex/Claude/Gemini/Antigravity protocol emulation, headers, payload translation, retries, and API compatibility.
+
+The fork is primarily for QoL and user-facing features, fork-specific configuration/deployment, management UI integration, providers not accepted upstream, and other deliberate product behavior. Preserve those fork features, but do not preserve an older fork implementation merely because it differs from upstream. For shared code, use upstream as the base and deliberately reapply or combine only the fork-owned behavior that remains required.
+
+For auth lifecycle, persistence, scheduling, and concurrency, upstream may replace the fork implementation when it provides the newer architecture; port fork-specific hooks and policies into that architecture rather than reverting to the older fork code. Validate that Qoder/Qoder CN, Codex private-instructions, xAI/Codex failure policy, usage monitoring, management routes/assets, model-context overrides, and the single data-root behavior survive.
+
 ### API fork-preservation gate (mandatory before committing an upstream merge)
 1. Start from a clean worktree, record the pre-merge commit, fetch upstream, and perform a no-commit merge. Review the complete resulting diff against the recorded commit, including non-conflicting automatic changes, file deletions, renames, and splits.
 2. For every changed fork-owned file or shared function, classify the incoming diff: allowed functional/security fix to retain, manually combined change, or upstream change excluded in favor of the fork. Do not retain an upstream rewrite merely because it is in the same file as a valid fix.
