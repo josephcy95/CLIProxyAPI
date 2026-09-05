@@ -489,7 +489,10 @@ func (h *Handler) PostModelPricesSync(c *gin.Context) {
 		ApplyMatched:   apply,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": err.Error(), "source_results": result.SourceResults,
+			"outcomes": result.Outcomes, "preserved": result.Preserved,
+		})
 		return
 	}
 	c.JSON(http.StatusOK, result)

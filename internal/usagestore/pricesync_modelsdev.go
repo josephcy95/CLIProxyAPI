@@ -63,10 +63,10 @@ func newSyncedPrice(id, source, rawJSON string, rates ModelPriceContextTier) Mod
 }
 
 func fetchModelsDevPrices(ctx context.Context, syncURL string, client *http.Client) (map[string]remoteCatalogPrice, int, error) {
-	body, err := httpGetBody(ctx, client, syncURL)
-	if err != nil {
-		return nil, 0, err
-	}
+	return fetchCachedModelsDevPrices(ctx, syncURL, client)
+}
+
+func parseModelsDevPrices(body []byte) (map[string]remoteCatalogPrice, int, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, 0, fmt.Errorf("models.dev decode: %w", err)
@@ -80,6 +80,26 @@ func fetchModelsDevPrices(ctx context.Context, syncURL string, client *http.Clie
 		}
 		if err := json.Unmarshal(root["models"], &canonical); err != nil || len(canonical) == 0 {
 			return nil, 0, fmt.Errorf("models.dev: missing canonical models")
+		}
+	}
+	if !hasCanonical {
+		// The legacy provider-indexed endpoint has no canonical registry. Only
+		// primary model creators can supply bare official identities; aggregators
+		// remain selectable by their explicit provider/model ID or confirmation.
+		canonical = make(map[string]json.RawMessage)
+		for providerID, rawProvider := range providers {
+			if !isModelsDevOfficialProvider(providerID) {
+				continue
+			}
+			var provider struct {
+				Models map[string]json.RawMessage `json:"models"`
+			}
+			if err := json.Unmarshal(rawProvider, &provider); err != nil {
+				return nil, 0, fmt.Errorf("models.dev provider: %w", err)
+			}
+			for modelID := range provider.Models {
+				canonical[strings.TrimSpace(providerID)+"/"+strings.TrimSpace(modelID)] = nil
+			}
 		}
 	}
 	// Only unambiguous canonical tails identify an official provider. Keep an
@@ -132,7 +152,11 @@ func fetchModelsDevPrices(ctx context.Context, syncURL string, client *http.Clie
 			price := newSyncedPrice(id, SyncSourceModelsDev, string(rawModel), rates)
 			price.ContextTiers = readModelsDevContextTiers(cost)
 			price.ServiceTiers = readModelsDevServiceTiers(entry)
-			remote := remoteCatalogPrice{id: id, source: SyncSourceModelsDev, price: price, directOnly: hasCanonical}
+			if !completeModelsDevRules(entry, cost, price) {
+				skipped++
+				continue
+			}
+			remote := remoteCatalogPrice{id: id, source: SyncSourceModelsDev, price: price, directOnly: true}
 			normalized := strings.ToLower(id)
 			if _, official := canonicalIDs[normalized]; official {
 				remote.officialIDs = []string{id}
@@ -204,4 +228,51 @@ func readModelsDevServiceTiers(entry map[string]any) []ModelPriceServiceTier {
 		PromptConfigured: rates.PromptConfigured, CompletionConfigured: rates.CompletionConfigured,
 		CacheConfigured: rates.CacheConfigured, CacheReadConfigured: rates.CacheReadConfigured, CacheCreationConfigured: rates.CacheCreationConfigured,
 	}}
+}
+
+// Never turn malformed or unsupported conditional pricing into a flat price.
+func completeModelsDevRules(entry, cost map[string]any, price ModelPrice) bool {
+	if raw, exists := cost["tiers"]; exists && raw != nil {
+		tiers, ok := raw.([]any)
+		if !ok || len(tiers) != len(price.ContextTiers) {
+			return false
+		}
+	}
+	if raw, exists := entry["experimental"]; exists && raw != nil {
+		experimental, ok := raw.(map[string]any)
+		if !ok {
+			return false
+		}
+		if rawModes, exists := experimental["modes"]; exists && rawModes != nil {
+			modes, ok := rawModes.(map[string]any)
+			if !ok {
+				return false
+			}
+			for name, rawMode := range modes {
+				mode, ok := rawMode.(map[string]any)
+				if !ok {
+					return false
+				}
+				if cost, exists := mode["cost"]; exists && cost != nil {
+					if name != "fast" || len(price.ServiceTiers) != 1 {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+// Explicit authority list for the legacy schema, not a guess based on a
+// reseller's model prefix, display name, SDK package or advertised family.
+func isModelsDevOfficialProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "anthropic", "google", "xai", "deepseek", "mistral", "cohere",
+		"alibaba", "moonshotai", "zai", "minimax", "meta", "perplexity", "xiaomi",
+		"stepfun", "inception", "upstage", "ai21", "arcee", "longcat", "sensenova",
+		"sarvam", "sakana", "poolside", "bailing", "thinkingmachines":
+		return true
+	}
+	return false
 }

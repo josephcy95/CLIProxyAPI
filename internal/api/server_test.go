@@ -2432,6 +2432,8 @@ var managementRouteContract = []struct {
 	{http.MethodGet, "/v0/management/usage-queue"},
 	{http.MethodGet, "/v0/management/api-key-usage"},
 	// Model pricing.
+	{http.MethodGet, "/v0/management/usage-retention-days"},
+	{http.MethodPut, "/v0/management/usage-retention-days"},
 	{http.MethodGet, "/v0/management/model-prices"},
 	{http.MethodPut, "/v0/management/model-prices"},
 	{http.MethodDelete, "/v0/management/model-prices"},

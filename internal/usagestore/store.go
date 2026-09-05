@@ -105,6 +105,16 @@ func (s *Store) Path() string {
 	return s.path
 }
 
+// RetentionDays returns the active cleanup policy, including the default.
+func (s *Store) RetentionDays() int {
+	if s == nil {
+		return DefaultRetentionDays
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.retentionDays
+}
+
 // SetRetentionDays updates retention used by the cleaner.
 func (s *Store) SetRetentionDays(days int) {
 	if s == nil {

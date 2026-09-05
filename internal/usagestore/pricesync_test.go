@@ -86,26 +86,22 @@ func TestSyncSkipsAlreadyPricedModels(t *testing.T) {
 		t.Fatalf("UpsertModelPriceAliases: %v", err)
 	}
 
-	// Force empty remote catalogs so any candidate would only come from fuzzy matching.
-	// Sync still runs local skip logic before remote match attempts.
-	result, err := store.SyncModelPrices(context.Background(), PriceSyncRequest{
+	// A local catalog exercises protection deterministically, without live network.
+	client := priceSyncFixtureClient(t, map[string]string{SyncSourceLiteLLM: `{"unpriced-model":{"input_cost_per_token":0.000001}}`})
+	result, err := store.syncModelPrices(context.Background(), PriceSyncRequest{
 		Models:       []string{"mapped-model", "manual-model", "unpriced-model"},
 		ApplyMatched: false,
-	})
+	}, client)
 	if err != nil {
-		// Network may fail; that is fine for this unit test of skip logic only if we get a result.
-		// Re-run path with local-only models by ensuring priced models never appear as candidates.
-		t.Logf("SyncModelPrices network/error: %v", err)
+		t.Fatal(err)
 	}
-	if err == nil {
-		for _, set := range result.Candidates {
-			if set.Model == "mapped-model" || set.Model == "manual-model" {
-				t.Fatalf("priced model %q should not appear in candidates: %#v", set.Model, set)
-			}
+	for _, set := range result.Candidates {
+		if set.Model == "mapped-model" || set.Model == "manual-model" {
+			t.Fatalf("priced model %q should not appear in candidates: %#v", set.Model, set)
 		}
-		if result.SkippedManual < 1 {
-			t.Fatalf("expected manual skip for manual-model, got skipped_manual=%d skipped=%d", result.SkippedManual, result.Skipped)
-		}
+	}
+	if result.SkippedManual != 2 {
+		t.Fatalf("expected two protected entries: %+v", result)
 	}
 
 	// Pure unit check for protected source helper.

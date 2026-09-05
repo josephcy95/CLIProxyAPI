@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,8 +63,21 @@ type PriceSyncSourceResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// PriceSyncOutcome explains one scoped model decision. Source fields describe the
+// selected record (or the retained record when protected). Rules are never mixed.
+type PriceSyncOutcome struct {
+	Model         string `json:"model"`
+	Status        string `json:"status"`
+	Source        string `json:"source"`
+	SourceModelID string `json:"source_model_id"`
+	HasRules      bool   `json:"has_rules"`
+	Reason        string `json:"reason"`
+}
+
 // PriceSyncResult is returned by SyncModelPrices.
 type PriceSyncResult struct {
+	Unchanged     int                     `json:"unchanged"`
+	Outcomes      []PriceSyncOutcome      `json:"outcomes"`
 	Sources       []string                `json:"sources,omitempty"`
 	Imported      int                     `json:"imported"`
 	Skipped       int                     `json:"skipped"`
@@ -126,9 +140,23 @@ func (s *Store) syncModelPrices(ctx context.Context, req PriceSyncRequest, clien
 	}
 	catalog, sourceResults, sources, fetchSkipped := fetchPriceCatalogs(ctx, client)
 	if len(sources) == 0 {
-		return PriceSyncResult{SourceResults: sourceResults}, fmt.Errorf("price sync: all sources failed")
+		result := PriceSyncResult{SourceResults: sourceResults}
+		for _, model := range models {
+			result.Outcomes = append(result.Outcomes, syncOutcome(model, "source_failure", "all sources failed; existing pricing retained", existing[model]))
+		}
+		return result, fmt.Errorf("price sync: all sources failed")
 	}
 	if err := ctx.Err(); err != nil {
+		return PriceSyncResult{SourceResults: sourceResults}, err
+	}
+	// Catalog fetches may be slow. Re-read the book and mappings before selection
+	// so manual edits made while fetching are not replaced from an old snapshot.
+	existing, err = s.LoadModelPrices(ctx)
+	if err != nil {
+		return PriceSyncResult{SourceResults: sourceResults}, err
+	}
+	aliases, err = s.LoadModelPriceAliases(ctx)
+	if err != nil {
 		return PriceSyncResult{SourceResults: sourceResults}, err
 	}
 	aliasMap := AliasMap(aliases)
@@ -159,25 +187,35 @@ func (s *Store) syncModelPrices(ctx context.Context, req PriceSyncRequest, clien
 			}
 			if aliased || (hasPrice && isProtectedPriceSource(resolved.Source)) {
 				result.SkippedManual++
+				result.Outcomes = append(result.Outcomes, syncOutcome(modelID, "protected", "manual price or explicit alias", resolved))
 				continue
 			}
 		}
-		price, _, ok := findAutomaticCatalogPrice(catalog, modelID)
-		if hasPrice && !isProtectedPriceSource(resolved.Source) {
+		price, reason, ok := findAutomaticCatalogPrice(catalog, modelID)
+
+		if hasPrice && strings.EqualFold(target, modelID) && !isProtectedPriceSource(resolved.Source) {
 			source := strings.ToLower(strings.TrimSpace(resolved.Source))
-			// Retain a last-known price when its source failed; an available higher-priority
-			// source may still upgrade it, but a lower-priority fallback must not downgrade it.
-			if !available[source] && (!ok || sourceRank(price.Source) >= sourceRank(source)) {
+			customMapping := resolved.SourceModelID != "" && !isAutomaticSourceIdentity(modelID, resolved.SourceModelID)
+			// Ordinary automatic imports can upgrade to a higher-priority whole
+			// record. A distinct, confirmed local-to-source mapping must stay pinned.
+			if !available[source] && (customMapping || !ok || sourceRank(price.Source) >= sourceRank(source)) {
 				result.Skipped++
 				result.Preserved = append(result.Preserved, modelID)
+				result.Outcomes = append(result.Outcomes, syncOutcome(modelID, "source_failure", "saved source unavailable; last-good price retained", resolved))
 				continue
 			}
-			// Previously confirmed mappings refresh by their source identity, not fuzzy guesses.
-			if entry, found := catalog[source+"\x00"+resolved.SourceModelID]; found &&
-				(!ok || sourceRank(entry.source) < sourceRank(price.Source)) {
-				price, ok = entry.price, true
+			if resolved.SourceModelID != "" && (customMapping || !ok || sourceRank(price.Source) > sourceRank(source)) {
+				entry, found := findCatalogIdentity(catalog, source, resolved.SourceModelID)
+				if !found {
+					result.Skipped++
+					result.Preserved = append(result.Preserved, modelID)
+					result.Outcomes = append(result.Outcomes, syncOutcome(modelID, "protected", "saved source identity missing, unsupported or ambiguous; last-good price retained", resolved))
+					continue
+				}
+				price, reason, ok = entry.price, "saved-source-identity", true
 			}
 		}
+
 		if ok {
 			price.Model = modelID
 			// ResolvePrice also accepts case-insensitive direct IDs; refresh the same row.
@@ -185,17 +223,23 @@ func (s *Store) syncModelPrices(ctx context.Context, req PriceSyncRequest, clien
 				price.Model = target
 			}
 			matched = append(matched, price)
-			toImport = append(toImport, price)
+			if hasPrice && strings.EqualFold(target, modelID) && sameSyncedPrice(resolved, price) {
+				result.Unchanged++
+				result.Outcomes = append(result.Outcomes, syncOutcome(modelID, "unchanged", "selected whole record unchanged", resolved))
+			} else {
+				toImport = append(toImport, price)
+				status := "matched"
+				if req.ApplyMatched {
+					status = "updated"
+				}
+				result.Outcomes = append(result.Outcomes, syncOutcome(modelID, status, reason, price))
+			}
 			continue
 		}
 
-		// Fuzzy candidates only for models that still have no pricing.
-		if _, _, ok := ResolvePrice([]string{modelID}, existing, aliasMap); ok {
-			result.Skipped++
-			continue
-		}
 		cands := findCatalogCandidates(catalog, modelID)
 		if len(cands) > 0 {
+			result.Outcomes = append(result.Outcomes, syncOutcome(modelID, "needs_matching", "no unambiguous identity; confirm a candidate; existing pricing retained", resolved))
 			result.Candidates = append(result.Candidates, PriceSyncCandidateSet{
 				Model:      modelID,
 				Candidates: cands,
@@ -203,6 +247,7 @@ func (s *Store) syncModelPrices(ctx context.Context, req PriceSyncRequest, clien
 			continue
 		}
 		result.Unmatched = append(result.Unmatched, modelID)
+		result.Outcomes = append(result.Outcomes, syncOutcome(modelID, "no_supported_rules", "no supported pricing record found; existing pricing retained", resolved))
 	}
 
 	result.Matched = matched
@@ -405,7 +450,7 @@ func findAutomaticCatalogPrice(catalog map[string]remoteCatalogPrice, modelID st
 	for _, source := range []string{SyncSourceModelsDev, SyncSourceLiteLLM, SyncSourceOpenRouter} {
 		// Match within each source before falling back; another source's exact key
 		// must not defeat an official models.dev identity.
-		for _, reason := range []string{"models.dev-official", "exact", "case-insensitive", "provider-prefix"} {
+		for _, reason := range []string{"models.dev-official", "exact", "case-insensitive", "source-model-id", "provider-prefix", "normalized"} {
 			var found ModelPrice
 			count := 0
 			for _, e := range catalog {
@@ -425,9 +470,12 @@ func findAutomaticCatalogPrice(catalog map[string]remoteCatalogPrice, modelID st
 					match = e.id == modelID
 				case "case-insensitive":
 					match = strings.EqualFold(e.id, modelID)
+				case "source-model-id":
+					match = !e.directOnly && e.price.SourceModelID != "" && strings.EqualFold(e.price.SourceModelID, modelID)
 				case "provider-prefix":
-					// Punctuation/name normalization is fuzzy and is never auto-applied.
-					match = !e.directOnly && strings.EqualFold(lastModelSegment(e.id), lastModelSegment(modelID))
+					match = !e.directOnly && canonicalModelTail(modelID) != "" && (canonicalModelTail(e.id) == canonicalModelTail(modelID) || canonicalModelTail(e.price.SourceModelID) == canonicalModelTail(modelID))
+				case "normalized":
+					match = !e.directOnly && canonicalModelID(modelID) != "" && (canonicalModelID(e.id) == canonicalModelID(modelID) || canonicalModelID(e.price.SourceModelID) == canonicalModelID(modelID))
 				}
 				if match {
 					found = e.price
@@ -634,4 +682,35 @@ func readString(m map[string]any, key string) string {
 		return s
 	}
 	return fmt.Sprint(v)
+}
+
+func syncOutcome(model, status, reason string, p ModelPrice) PriceSyncOutcome {
+	return PriceSyncOutcome{Model: model, Status: status, Reason: reason, Source: p.Source, SourceModelID: p.SourceModelID, HasRules: len(p.ContextTiers) > 0 || len(p.ServiceTiers) > 0}
+}
+
+func sameSyncedPrice(a, b ModelPrice) bool {
+	a.UpdatedAtMS, b.UpdatedAtMS, a.SyncedAtMS, b.SyncedAtMS = 0, 0, 0, 0
+	// Raw source metadata can change without changing any supported pricing rule.
+	a.RawJSON, b.RawJSON = "", ""
+	return reflect.DeepEqual(a, b)
+}
+
+func findCatalogIdentity(catalog map[string]remoteCatalogPrice, source, id string) (remoteCatalogPrice, bool) {
+	var found remoteCatalogPrice
+	count := 0
+	for _, entry := range catalog {
+		if entry.source == source && strings.EqualFold(entry.id, id) {
+			found = entry
+			count++
+		}
+	}
+	return found, count == 1
+}
+
+// The existing schema does not persist confirmation provenance. Distinct local
+// names identify custom mappings; identity-equivalent rows are automatic and
+// may follow normal source priority (including upgrades from fallback sources).
+func isAutomaticSourceIdentity(model, sourceID string) bool {
+	return canonicalModelTail(model) != "" && canonicalModelTail(model) == canonicalModelTail(sourceID) ||
+		canonicalModelID(model) != "" && canonicalModelID(model) == canonicalModelID(sourceID)
 }

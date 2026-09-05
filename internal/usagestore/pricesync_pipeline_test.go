@@ -172,7 +172,7 @@ func TestPriceSyncPipelineRefreshProtectAndOutage(t *testing.T) {
 	// Empty request also refreshes stored sync entries with no usage rows.
 	bodies[SyncSourceModelsDev] = strings.ReplaceAll(modelsDevOfficialFixture, `"input":2.5`, `"input":3.5`)
 	result, err = store.syncModelPrices(ctx, PriceSyncRequest{ApplyMatched: true}, client)
-	if err != nil || result.Imported != 3 {
+	if err != nil || result.Imported != 2 || result.Unchanged != 1 {
 		t.Fatalf("recovery=%+v err=%v", result, err)
 	}
 	recovered, _ := store.LoadModelPrices(ctx)
@@ -210,7 +210,7 @@ func TestPriceSyncPipelineFailuresAndFuzzyConfirmation(t *testing.T) {
 	bodies[SyncSourceModelsDev] = modelsDevOfficialFixture
 	bodies[SyncSourceLiteLLM] = `{"openai/gpt-test":{"input_cost_per_token":0.000008}}`
 	bodies[SyncSourceOpenRouter] = `{"data":[{"id":"openai/gpt-test","pricing":{"prompt":"0.000009"}}]}`
-	result, err = store.syncModelPrices(ctx, PriceSyncRequest{Models: []string{"brand-gpt-test", "gpt_test"}, ApplyMatched: true}, client)
+	result, err = store.syncModelPrices(ctx, PriceSyncRequest{Models: []string{"brand-gpt-test", "gpt-test-custom"}, ApplyMatched: true}, client)
 	if err != nil || result.Imported != 0 || len(result.Candidates) != 2 {
 		t.Fatalf("fuzzy=%+v err=%v", result, err)
 	}
@@ -234,7 +234,7 @@ func TestPriceSyncPipelineRejectUnsafeRatesAndTiers(t *testing.T) {
 		t.Run(size, func(t *testing.T) {
 			body := `{"test":{"models":{"model":{"cost":{"input":2.5,"tiers":[{"input":5,"tier":{"type":"context","size":` + size + `}}]}}}}}`
 			catalog, _, err := fetchModelsDevPrices(context.Background(), defaultModelsDevURL, priceSyncFixtureClient(t, map[string]string{SyncSourceModelsDev: body}))
-			if err != nil || len(catalog["test/model"].price.ContextTiers) != 0 {
+			if err == nil || len(catalog) != 0 {
 				t.Fatalf("unsafe threshold activated: %+v err=%v", catalog, err)
 			}
 		})
@@ -247,7 +247,7 @@ func TestPriceSyncPipelineRejectUnsafeRatesAndTiers(t *testing.T) {
   "zero":{"cost":{"input":0,"output":0}}
  }}}`
 	catalog, skipped, err := fetchModelsDevPrices(context.Background(), defaultModelsDevURL, priceSyncFixtureClient(t, map[string]string{SyncSourceModelsDev: body}))
-	if err != nil || skipped != 3 || len(catalog) != 2 || len(catalog["test/duplicate"].price.ContextTiers) != 0 || !catalog["test/zero"].price.PromptConfigured {
+	if err != nil || skipped != 4 || len(catalog) != 1 || len(catalog["test/duplicate"].price.ContextTiers) != 0 || !catalog["test/zero"].price.PromptConfigured {
 		t.Fatalf("catalog=%+v skipped=%d err=%v", catalog, skipped, err)
 	}
 }
