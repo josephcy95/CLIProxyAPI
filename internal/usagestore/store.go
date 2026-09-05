@@ -20,7 +20,7 @@ import (
 const (
 	// DefaultStoreRelativePath is relative to CLIPROXY_DATA_DIR (default /data/usage.db).
 	DefaultStoreRelativePath = "usage.db"
-	DefaultRetentionDays     = 30
+	DefaultRetentionDays     = 90
 	maxInsertBatch           = 64
 )
 
