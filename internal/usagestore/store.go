@@ -249,6 +249,16 @@ func migrate(db *sql.DB) error {
 			cache_read_per_1m REAL NOT NULL DEFAULT 0,
 			cache_creation_per_1m REAL NOT NULL DEFAULT 0,
 			source TEXT,
+			source_model_id TEXT,
+			raw_json TEXT,
+			context_tiers TEXT NOT NULL DEFAULT '[]',
+			service_tiers TEXT NOT NULL DEFAULT '[]',
+			prompt_configured INTEGER NOT NULL DEFAULT 0,
+			completion_configured INTEGER NOT NULL DEFAULT 0,
+			cache_configured INTEGER NOT NULL DEFAULT 0,
+			cache_read_configured INTEGER NOT NULL DEFAULT 0,
+			cache_creation_configured INTEGER NOT NULL DEFAULT 0,
+			synced_at_ms INTEGER NOT NULL DEFAULT 0,
 			updated_at_ms INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS model_price_aliases (
@@ -267,6 +277,11 @@ func migrate(db *sql.DB) error {
 		msg := strings.ToLower(err.Error())
 		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
 			return fmt.Errorf("usagestore: migrate api_key: %w", err)
+		}
+	}
+	for _, column := range []string{"source_model_id TEXT", "raw_json TEXT", "context_tiers TEXT NOT NULL DEFAULT '[]'", "service_tiers TEXT NOT NULL DEFAULT '[]'", "prompt_configured INTEGER NOT NULL DEFAULT 0", "completion_configured INTEGER NOT NULL DEFAULT 0", "cache_configured INTEGER NOT NULL DEFAULT 0", "cache_read_configured INTEGER NOT NULL DEFAULT 0", "cache_creation_configured INTEGER NOT NULL DEFAULT 0", "synced_at_ms INTEGER NOT NULL DEFAULT 0"} {
+		if _, err := db.Exec("ALTER TABLE model_prices ADD COLUMN " + column); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return fmt.Errorf("usagestore: migrate model price: %w", err)
 		}
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_events_api_key ON usage_events(api_key)`); err != nil {

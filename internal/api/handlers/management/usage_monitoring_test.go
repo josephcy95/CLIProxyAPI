@@ -63,3 +63,39 @@ func TestUsageMonitoringQueries(t *testing.T) {
 		})
 	}
 }
+
+func TestModelPriceRulesHTTPValidation(t *testing.T) {
+	store, err := usagestore.Open(usagestore.Options{Path: filepath.Join(t.TempDir(), "usage.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := &Handler{usageStore: store}
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"valid", `{"prices":[{"model":"model","prompt_per_1m":2,"context_tiers":[{"threshold_tokens":100,"prompt_per_1m":0,"prompt_configured":true}]}]}`, 200},
+		{"negative tier", `{"replace":true,"prices":[{"model":"model","context_tiers":[{"threshold_tokens":100,"prompt_per_1m":-1,"prompt_configured":true}]}]}`, 400},
+		{"duplicate threshold", `{"replace":true,"prices":[{"model":"model","context_tiers":[{"threshold_tokens":100,"prompt_configured":true},{"threshold_tokens":100,"prompt_configured":true}]}]}`, 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			h.PutModelPrices(c)
+			if rec.Code != tc.status {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	prices, err := store.LoadModelPrices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := prices["model"]
+	if !ok || p.PromptPer1M != 2 || len(p.ContextTiers) != 1 || !p.ContextTiers[0].PromptConfigured || p.ContextTiers[0].PromptPer1M != 0 {
+		t.Fatalf("rules lost or invalid replacement destroyed prices: %+v", prices)
+	}
+}

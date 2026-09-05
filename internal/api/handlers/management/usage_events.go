@@ -377,6 +377,10 @@ func (h *Handler) PutModelPrices(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
+	if err := usagestore.ValidateModelPrices(body.Prices); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	var err error
 	if body.Replace {
 		err = store.ReplaceModelPrices(c.Request.Context(), body.Prices)
@@ -446,7 +450,7 @@ func (h *Handler) DeleteModelPrice(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// PostModelPricesSync fetches LiteLLM + OpenRouter catalogs, auto-imports
+// PostModelPricesSync fetches models.dev, LiteLLM, and OpenRouter catalogs, auto-imports
 // exact/unique matches for models seen in usage (or body.models), and returns
 // fuzzy candidates that need user confirmation.
 //
