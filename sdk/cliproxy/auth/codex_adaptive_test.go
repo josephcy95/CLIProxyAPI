@@ -438,3 +438,14 @@ func TestCodexAdaptiveDoesNotChangeGeminiRouting(t *testing.T) {
 		t.Fatalf("Gemini round-robin was replaced by adaptive routing: %q then %q", first.ID, second.ID)
 	}
 }
+
+func TestCodexAdaptiveExpiredSubscriptionIsMostUrgent(t *testing.T) {
+	now := time.Now()
+	due := &Auth{ID: "due", Provider: "codex", Metadata: map[string]any{"expires": now.Add(-24 * time.Hour).Format(time.RFC3339)}}
+	soon := &Auth{ID: "soon", Provider: "codex", Metadata: map[string]any{"expires": now.Add(3 * 24 * time.Hour).Format(time.RFC3339)}}
+	far := &Auth{ID: "far", Provider: "codex", Metadata: map[string]any{"expires": now.Add(10 * 24 * time.Hour).Format(time.RFC3339)}}
+	got := newCodexAdaptiveRouter().best([]*Auth{soon, far, due}, false, now)
+	if got != due {
+		t.Fatalf("selected %q, want due account", got.ID)
+	}
+}

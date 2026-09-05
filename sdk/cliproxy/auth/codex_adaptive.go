@@ -267,6 +267,7 @@ func (r *codexAdaptiveRouter) best(candidates []*Auth, preferFree bool, now time
 }
 
 type adaptiveScore struct {
+	expired  bool
 	urgency  float64
 	deadline time.Time
 	load     int
@@ -275,6 +276,9 @@ type adaptiveScore struct {
 }
 
 func (s adaptiveScore) betterThan(other adaptiveScore) bool {
+	if s.expired != other.expired {
+		return s.expired
+	}
 	if !s.deadline.Equal(other.deadline) {
 		if s.deadline.IsZero() {
 			return false
@@ -299,6 +303,7 @@ func (s adaptiveScore) betterThan(other adaptiveScore) bool {
 func adaptiveScoreFor(auth *Auth, state codexAdaptiveAccount, now time.Time) adaptiveScore {
 	weeklyPrefix := codexWeeklyQuotaPrefix(auth.Quota.Signals)
 	return adaptiveScore{
+		expired:  codexSubscriptionExpired(auth, now),
 		urgency:  codexQuotaUrgency(auth, now),
 		deadline: codexQuotaDeadline(auth, now, weeklyPrefix),
 		load:     state.inFlight,
@@ -474,6 +479,18 @@ func codexWeeklyQuotaPrefix(signals map[string]string) string {
 		return "X-Codex-Secondary-"
 	}
 	return ""
+}
+
+func codexSubscriptionExpired(auth *Auth, now time.Time) bool {
+	if auth == nil || auth.Metadata == nil {
+		return false
+	}
+	for _, key := range []string{"chatgpt_subscription_active_until", "subscription_active_until", "expired", "expires_at", "expires"} {
+		if expiry, ok := parseTimeValue(auth.Metadata[key]); ok && !expiry.After(now) {
+			return true
+		}
+	}
+	return !codexJWTSubscriptionExpiry(auth.Metadata).After(now) && !codexJWTSubscriptionExpiry(auth.Metadata).IsZero()
 }
 
 func codexQuotaDeadline(auth *Auth, now time.Time, weeklyPrefix string) time.Time {
