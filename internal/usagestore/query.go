@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -188,7 +189,7 @@ func (s *Store) ListEvents(ctx context.Context, filter QueryFilter) ([]Event, er
 		latency_ms, ttft_ms, failed, IFNULL(fail_status_code,0), IFNULL(fail_summary,''), created_at_ms
 		FROM usage_events ` + where + ` ORDER BY id DESC LIMIT ?`
 	args = append(args, filter.Limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +250,7 @@ func (s *Store) GetSummary(ctx context.Context, filter QueryFilter) (Summary, er
 		IFNULL(AVG(latency_ms),0),
 		IFNULL(AVG(ttft_ms),0)
 		FROM usage_events ` + where
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(
 		&summary.TotalCalls, &summary.SuccessCalls, &summary.FailureCalls,
 		&summary.InputTokens, &summary.NetInputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
 		&summary.CachedTokens, &summary.CacheReadTokens, &summary.CacheCreationTokens,
@@ -306,7 +307,7 @@ func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit i
 		ORDER BY COUNT(*) DESC
 		LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +363,12 @@ func (s *Store) attachAccountRecentRequests(ctx context.Context, filter QueryFil
 	}
 
 	where, args := buildWhere(filter)
+	groups := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		groups = append(groups, "(IFNULL(auth_index,'') = ? AND IFNULL(source,'') = ? AND IFNULL(source_hash,'') = ? AND IFNULL(provider,'') = ?)")
+		args = append(args, stat.AuthIndex, stat.Source, stat.SourceHash, stat.Provider)
+	}
+	where += " AND (" + strings.Join(groups, " OR ") + ")"
 	query := `SELECT IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
 		CAST(timestamp_ms / ? AS INTEGER) AS bucket_id,
 		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
@@ -371,7 +378,7 @@ func (s *Store) attachAccountRecentRequests(ctx context.Context, filter QueryFil
 	queryArgs := make([]any, 0, len(args)+1)
 	queryArgs = append(queryArgs, recentRequestBucketDurationMS)
 	queryArgs = append(queryArgs, args...)
-	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	rows, err := s.readDB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return err
 	}
@@ -417,7 +424,7 @@ func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[stri
 		COUNT(*)
 		FROM usage_events ` + where + `
 		GROUP BY model, alias`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -458,7 +465,7 @@ func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices ma
 		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0)
 		FROM usage_events ` + where + `
 		GROUP BY auth_index, source, source_hash, provider, model, alias`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +520,7 @@ func (s *Store) GetAPIKeyStats(ctx context.Context, filter QueryFilter, limit in
 		ORDER BY COUNT(*) DESC
 		LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +554,7 @@ func (s *Store) CostByAPIKey(ctx context.Context, filter QueryFilter, prices map
 		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0)
 		FROM usage_events ` + where + `
 		GROUP BY api_key, api_key_hash, model, alias`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +587,7 @@ func APIKeyGroupKey(apiKey, apiKeyHash string) string {
 // own constraint, so choosing e.g. a provider narrows models/sources/api keys
 // to values that co-occur in usage data while still allowing the user to switch
 // within the same facet.
-func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (FilterOptions, error) {
+func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter, fields ...string) (FilterOptions, error) {
 	var out FilterOptions
 	if s == nil {
 		return out, fmt.Errorf("usagestore: nil store")
@@ -590,7 +597,15 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 	// Free-text search is for event rows, not structured facet menus.
 	filter.Search = ""
 
-	load := func(column string, facet QueryFilter) ([]string, error) {
+	for _, field := range fields {
+		if !slices.Contains([]string{"models", "providers", "auth_indices", "sources", "api_keys", "api_key_hashes"}, field) {
+			return out, fmt.Errorf("unknown filter field %q", field)
+		}
+	}
+	load := func(field, column string, facet QueryFilter) ([]string, error) {
+		if len(fields) > 0 && !slices.Contains(fields, field) {
+			return []string{}, nil
+		}
 		facet.BeforeID = 0
 		facet.Limit = 0
 		facet.Search = ""
@@ -601,7 +616,7 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 		} else {
 			query = fmt.Sprintf(`SELECT DISTINCT %s FROM usage_events %s AND IFNULL(%s,'') <> '' ORDER BY %s LIMIT 200`, column, where, column, column)
 		}
-		rows, err := s.db.QueryContext(ctx, query, args...)
+		rows, err := s.readDB.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -637,22 +652,22 @@ func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter) (Filte
 	apiKeyHashesFacet.APIKeyHashes = nil
 
 	var err error
-	if out.Models, err = load("model", modelsFacet); err != nil {
+	if out.Models, err = load("models", "model", modelsFacet); err != nil {
 		return out, err
 	}
-	if out.Providers, err = load("provider", providersFacet); err != nil {
+	if out.Providers, err = load("providers", "provider", providersFacet); err != nil {
 		return out, err
 	}
-	if out.AuthIndices, err = load("auth_index", authFacet); err != nil {
+	if out.AuthIndices, err = load("auth_indices", "auth_index", authFacet); err != nil {
 		return out, err
 	}
-	if out.Sources, err = load("source", sourcesFacet); err != nil {
+	if out.Sources, err = load("sources", "source", sourcesFacet); err != nil {
 		return out, err
 	}
-	if out.APIKeys, err = load("api_key", apiKeysFacet); err != nil {
+	if out.APIKeys, err = load("api_keys", "api_key", apiKeysFacet); err != nil {
 		return out, err
 	}
-	if out.APIKeyHashes, err = load("api_key_hash", apiKeyHashesFacet); err != nil {
+	if out.APIKeyHashes, err = load("api_key_hashes", "api_key_hash", apiKeyHashesFacet); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -674,7 +689,7 @@ func (s *Store) ListDistinctModels(ctx context.Context, fromMS int64, limit int)
 	}
 	query += ` ORDER BY model LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -688,4 +703,41 @@ func (s *Store) ListDistinctModels(ctx context.Context, fromMS int64, limit int)
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// AccountRecentRequests contains only the identity and recent outcomes needed by request-row status bars.
+type AccountRecentRequests struct {
+	AuthIndex      string                `json:"auth_index,omitempty"`
+	Source         string                `json:"source,omitempty"`
+	SourceHash     string                `json:"source_hash,omitempty"`
+	Provider       string                `json:"provider,omitempty"`
+	RecentRequests []RecentRequestBucket `json:"recent_requests"`
+}
+
+// GetAccountRecentRequests does not compute range-wide aggregates or load prices.
+func (s *Store) GetAccountRecentRequests(ctx context.Context, filter QueryFilter, accounts []AccountRecentRequests, now time.Time) ([]AccountRecentRequests, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	if len(accounts) > 200 {
+		return nil, fmt.Errorf("at most 200 account groups are allowed")
+	}
+	stats := make([]AccountStat, 0, len(accounts))
+	seen := make(map[string]bool, len(accounts))
+	for _, a := range accounts {
+		key := AccountKey(a.AuthIndex, a.Source, a.SourceHash, a.Provider)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		stats = append(stats, AccountStat{AuthIndex: a.AuthIndex, Source: a.Source, SourceHash: a.SourceHash, Provider: a.Provider})
+	}
+	if err := s.attachAccountRecentRequests(ctx, filter, stats, now); err != nil {
+		return nil, err
+	}
+	out := make([]AccountRecentRequests, 0, len(stats))
+	for _, a := range stats {
+		out = append(out, AccountRecentRequests{AuthIndex: a.AuthIndex, Source: a.Source, SourceHash: a.SourceHash, Provider: a.Provider, RecentRequests: a.RecentRequests})
+	}
+	return out, nil
 }

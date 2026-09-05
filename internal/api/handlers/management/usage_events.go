@@ -55,6 +55,7 @@ type usageQueryBody struct {
 	SuccessOnly  bool     `json:"success_only"`
 	Limit        int      `json:"limit"`
 	BeforeID     int64    `json:"before_id"`
+	Fields       []string `json:"fields"`
 }
 
 func parseUsageFilter(c *gin.Context, body *usageQueryBody) usagestore.QueryFilter {
@@ -228,10 +229,24 @@ func (h *Handler) GetUsageFilterOptions(c *gin.Context) {
 	}
 	var body usageQueryBody
 	if c.Request.Method == http.MethodPost {
-		_ = c.ShouldBindJSON(&body)
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid usage query"})
+			return
+		}
 	}
 	filter := parseUsageFilter(c, &body)
-	opts, err := store.GetFilterOptions(c.Request.Context(), filter)
+	if v := c.Query("fields"); v != "" {
+		body.Fields = splitCSV(v)
+	}
+	for _, field := range body.Fields {
+		switch field {
+		case "models", "providers", "auth_indices", "sources", "api_keys", "api_key_hashes":
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown filter field", "field": field})
+			return
+		}
+	}
+	opts, err := store.GetFilterOptions(c.Request.Context(), filter, body.Fields...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -474,4 +489,33 @@ func (h *Handler) PostModelPricesSync(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// GetUsageAccountRecentRequests serves bounded status-bar data without full account statistics.
+func (h *Handler) GetUsageAccountRecentRequests(c *gin.Context) {
+	store := h.requireUsageStore(c)
+	if store == nil {
+		return
+	}
+	var body struct {
+		usageQueryBody
+		Accounts []usagestore.AccountRecentRequests `json:"accounts"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid recent-request query"})
+		return
+	}
+	filter := parseUsageFilter(c, &body.usageQueryBody)
+	if len(body.Accounts) > 200 || filter.FromMS < 0 || filter.ToMS < 0 || (filter.FromMS > 0 && filter.ToMS > 0 && filter.FromMS > filter.ToMS) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid time range or more than 200 account groups"})
+		return
+	}
+	now := time.Now()
+	accounts, err := store.GetAccountRecentRequests(c.Request.Context(), filter, body.Accounts, now)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": accounts, "generated_at_ms": now.UnixMilli()})
 }

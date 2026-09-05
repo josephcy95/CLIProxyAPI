@@ -31,7 +31,7 @@ func (s *Store) LoadModelPrices(ctx context.Context) (map[string]ModelPrice, err
 	if s == nil {
 		return nil, fmt.Errorf("usagestore: nil store")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT model, prompt_per_1m, completion_per_1m, cache_per_1m,
+	rows, err := s.readDB.QueryContext(ctx, `SELECT model, prompt_per_1m, completion_per_1m, cache_per_1m,
 		cache_read_per_1m, cache_creation_per_1m, IFNULL(source,''), updated_at_ms FROM model_prices ORDER BY model`)
 	if err != nil {
 		return nil, err
@@ -123,7 +123,7 @@ func (s *Store) LoadModelPriceAliases(ctx context.Context) ([]ModelPriceAlias, e
 	if s == nil {
 		return nil, fmt.Errorf("usagestore: nil store")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT alias, target_model, updated_at_ms FROM model_price_aliases ORDER BY alias`)
+	rows, err := s.readDB.QueryContext(ctx, `SELECT alias, target_model, updated_at_ms FROM model_price_aliases ORDER BY alias`)
 	if err != nil {
 		return nil, err
 	}

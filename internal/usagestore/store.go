@@ -5,7 +5,9 @@ package usagestore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,7 @@ const (
 // Store is a process-local SQLite database for usage monitoring.
 type Store struct {
 	db             *sql.DB
+	readDB         *sql.DB
 	path           string
 	retentionDays  int
 	mu             sync.RWMutex
@@ -47,7 +50,8 @@ func Open(opts Options) (*Store, error) {
 		return nil, fmt.Errorf("usagestore: create dir: %w", err)
 	}
 
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", filepath.ToSlash(path))
+	databaseURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	dsn := databaseURL + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("usagestore: open: %w", err)
@@ -61,6 +65,20 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 
+	// WAL readers use their own bounded pool so reporting cannot occupy the writer.
+	readDB, err := sql.Open("sqlite", databaseURL+"?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)")
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("usagestore: open readers: %w", err)
+	}
+	readDB.SetMaxOpenConns(4)
+	readDB.SetMaxIdleConns(4)
+	if err := readDB.Ping(); err != nil {
+		_ = readDB.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("usagestore: initialize readers: %w", err)
+	}
+
 	retention := opts.RetentionDays
 	if retention <= 0 {
 		retention = DefaultRetentionDays
@@ -68,6 +86,7 @@ func Open(opts Options) (*Store, error) {
 
 	s := &Store{
 		db:             db,
+		readDB:         readDB,
 		path:           path,
 		retentionDays:  retention,
 		insertCh:       make(chan Event, 1024),
@@ -113,7 +132,7 @@ func (s *Store) Close() error {
 	close(s.insertCh)
 	s.mu.Unlock()
 	s.wg.Wait()
-	return s.db.Close()
+	return errors.Join(s.readDB.Close(), s.db.Close())
 }
 
 // Enqueue buffers an event for async insert. Drops when closed or full.

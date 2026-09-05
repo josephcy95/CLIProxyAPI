@@ -94,6 +94,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/usage-filter-options", s.mgmt.GetUsageFilterOptions)
 		mgmt.GET("/usage-account-stats", s.mgmt.GetUsageAccountStats)
 		mgmt.POST("/usage-account-stats", s.mgmt.GetUsageAccountStats)
+		mgmt.POST("/usage-account-recent-requests", s.mgmt.GetUsageAccountRecentRequests)
 		mgmt.GET("/usage-api-key-stats", s.mgmt.GetUsageAPIKeyStats)
 		mgmt.POST("/usage-api-key-stats", s.mgmt.GetUsageAPIKeyStats)
 		mgmt.GET("/model-prices", s.mgmt.GetModelPrices)
