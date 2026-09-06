@@ -49,6 +49,14 @@ const (
 	ExecutionSessionMetadataKey = "execution_session_id"
 	// DerivedSessionIDMetadataKey stores a stable session identity inferred from request context.
 	DerivedSessionIDMetadataKey = "derived_session_id"
+	// CanonicalSessionIDMetadataKey stores the single unified session identity reconciled
+	// from explicit client signals, execution metadata, or derived identity.
+	CanonicalSessionIDMetadataKey = "canonical_session_id"
+	// ParentSessionIDMetadataKey stores the parent session identity for hierarchical sessions and forks.
+	ParentSessionIDMetadataKey = "parent_session_id"
+	// LCPAffinitySessionIDMetadataKey stores an optional caller-provided LCP routing identity.
+	// The fork does not run an LCP matcher; this key is preserved for SDK metadata passthrough.
+	LCPAffinitySessionIDMetadataKey = "lcp_affinity_session_id"
 	// CallerScopeMetadataKey isolates inferred session identities between downstream callers.
 	CallerScopeMetadataKey = "caller_scope"
 	// SessionAffinityProviderMetadataKey carries the affinity selection namespace

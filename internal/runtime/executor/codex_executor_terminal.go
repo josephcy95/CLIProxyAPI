@@ -289,15 +289,25 @@ func codexTerminalErrorIsContextLength(body []byte) bool {
 		strings.Contains(message, "too many tokens")
 }
 
+func isCodexServerOverloadedError(errorBody []byte) bool {
+	if len(errorBody) == 0 {
+		return false
+	}
+	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, "error.code").String()))
+	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, "error.type").String()))
+	return errorCode == "server_is_overloaded" || errorType == "service_unavailable_error"
+}
+
 func newCodexStatusErr(statusCode int, body []byte) statusErr {
 	errCode := statusCode
+	credentialScoped := isCodexUsageLimitError(body)
 	if isCodexServerOverloadedError(body) {
 		errCode = http.StatusServiceUnavailable
-	} else if isCodexModelCapacityError(body) || isCodexUsageLimitError(body) {
+	} else if isCodexModelCapacityError(body) || credentialScoped {
 		errCode = http.StatusTooManyRequests
 	}
 	body = classifyCodexStatusError(errCode, body)
-	err := statusErr{code: errCode, msg: string(body)}
+	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
 	}
@@ -350,15 +360,6 @@ func codexStatusErrorClassification(statusCode int, body []byte) (code string, e
 	}
 }
 
-func isCodexServerOverloadedError(errorBody []byte) bool {
-	if len(errorBody) == 0 {
-		return false
-	}
-	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, "error.code").String()))
-	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, "error.type").String()))
-	return errorCode == "server_is_overloaded" || errorType == "service_unavailable_error"
-}
-
 func isCodexModelCapacityError(errorBody []byte) bool {
 	if len(errorBody) == 0 {
 		return false
@@ -407,19 +408,69 @@ func parseCodexRetryAfter(statusCode int, errorBody []byte, now time.Time) *time
 	if statusCode != http.StatusTooManyRequests || len(errorBody) == 0 {
 		return nil
 	}
-	if strings.TrimSpace(gjson.GetBytes(errorBody, "error.type").String()) != "usage_limit_reached" {
-		return nil
-	}
-	if resetsAt := gjson.GetBytes(errorBody, "error.resets_at").Int(); resetsAt > 0 {
-		resetAtTime := time.Unix(resetsAt, 0)
-		if resetAtTime.After(now) {
-			retryAfter := resetAtTime.Sub(now)
+	for _, quota := range []gjson.Result{gjson.GetBytes(errorBody, "error"), gjson.ParseBytes(errorBody)} {
+		if !strings.EqualFold(strings.TrimSpace(quota.Get("type").String()), "usage_limit_reached") {
+			continue
+		}
+		if resetsAt := quota.Get("resets_at").Int(); resetsAt > 0 {
+			resetAtTime := time.Unix(resetsAt, 0)
+			if resetAtTime.After(now) {
+				retryAfter := resetAtTime.Sub(now)
+				return &retryAfter
+			}
+		}
+		if resetsInSeconds := quota.Get("resets_in_seconds").Int(); resetsInSeconds > 0 {
+			retryAfter := time.Duration(resetsInSeconds) * time.Second
 			return &retryAfter
 		}
 	}
-	if resetsInSeconds := gjson.GetBytes(errorBody, "error.resets_in_seconds").Int(); resetsInSeconds > 0 {
-		retryAfter := time.Duration(resetsInSeconds) * time.Second
-		return &retryAfter
-	}
 	return nil
+}
+
+// codexBootstrapMaxBufferedEvents bounds how many handshake metadata events may be held
+// back while probing for an upstream rejection embedded in an HTTP 200 stream. The websocket
+// transport prefixes response events with codex.response.metadata and codex.rate_limits frames,
+// so the limit must comfortably exceed the four handshake frames observed in practice. Once the
+// limit is reached the stream is released and the original unbuffered semantics apply.
+const codexBootstrapMaxBufferedEvents = 16
+
+// isCodexHandshakeMetadataEvent reports whether an event carries no generated output and is
+// therefore safe to hold back before the downstream response headers are committed. Keeping a type
+// allow-list rather than a fixed event count matters for the websocket transport, where the
+// handshake frames arrive before response.created and would otherwise exhaust a small counter
+// before the rejection event is seen.
+func isCodexHandshakeMetadataEvent(eventType string) bool {
+	switch eventType {
+	case "response.created", "response.in_progress", "codex.rate_limits", "codex.response.metadata":
+		return true
+	default:
+		return false
+	}
+}
+
+// newCodexBootstrapOverloadErr reports a buffered overload rejection with its real status.
+//
+// The status is deliberately produced here instead of in codexTerminalFailureStatus: that mapping
+// is shared with the unbuffered path, where the rejection is delivered in-stream and a status
+// change would alter cooldown classification and retry-after parsing for everyone. Keeping 503
+// scoped to this path means disabling the feature restores the previous behaviour exactly.
+func newCodexBootstrapOverloadErr(body []byte) statusErr {
+	return newCodexStatusErr(http.StatusServiceUnavailable, body)
+}
+
+// isCodexOverloadBootstrapFailure reports whether a terminal failure delivered inside an HTTP 200
+// stream is a transient capacity rejection that a different credential may be able to serve.
+// Only these failures justify replacing the whole attempt during bootstrap; every other terminal
+// failure keeps the original in-stream delivery semantics so downstream behaviour is unchanged.
+func isCodexOverloadBootstrapFailure(body []byte) bool {
+	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()))
+	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.code").String()))
+	switch {
+	case errorType == "service_unavailable_error", errorCode == "server_is_overloaded":
+		return true
+	case errorType == "rate_limit_error", errorCode == "rate_limit_exceeded":
+		return true
+	default:
+		return false
+	}
 }
