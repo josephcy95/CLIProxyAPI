@@ -18,17 +18,26 @@ const (
 	playgroundMaxMessageLength = 1 << 20
 )
 
+var playgroundReasoningEfforts = map[string]struct{}{
+	"minimal": {},
+	"low":     {},
+	"medium":  {},
+	"high":    {},
+	"xhigh":   {},
+}
+
 type playgroundMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
 type playgroundChatRequest struct {
-	Model     string              `json:"model"`
-	Provider  string              `json:"provider"`
-	AuthIndex string              `json:"auth_index"`
-	AuthID    string              `json:"auth_id"`
-	Messages  []playgroundMessage `json:"messages"`
+	Model           string              `json:"model"`
+	Provider        string              `json:"provider"`
+	AuthIndex       string              `json:"auth_index"`
+	AuthID          string              `json:"auth_id"`
+	ReasoningEffort string              `json:"reasoning_effort"`
+	Messages        []playgroundMessage `json:"messages"`
 }
 
 type playgroundRoute struct {
@@ -63,6 +72,7 @@ func (s *Server) playgroundChat(c *gin.Context) {
 	request.Provider = strings.TrimSpace(request.Provider)
 	request.AuthIndex = strings.TrimSpace(request.AuthIndex)
 	request.AuthID = strings.TrimSpace(request.AuthID)
+	request.ReasoningEffort = strings.ToLower(strings.TrimSpace(request.ReasoningEffort))
 	if request.Model == "" || request.Provider == "" || request.AuthIndex == "" || request.AuthID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "model, provider, auth_index, and auth_id are required"})
 		return
@@ -70,6 +80,12 @@ func (s *Server) playgroundChat(c *gin.Context) {
 	if errMessage := validatePlaygroundMessages(request.Messages); errMessage != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": errMessage})
 		return
+	}
+	if request.ReasoningEffort != "" {
+		if _, ok := playgroundReasoningEfforts[request.ReasoningEffort]; !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported reasoning_effort"})
+			return
+		}
 	}
 
 	auth := playgroundAuthByIdentity(s.handlers.AuthManager, request.AuthID, request.AuthIndex)
@@ -82,11 +98,15 @@ func (s *Server) playgroundChat(c *gin.Context) {
 		return
 	}
 
-	payload, errMarshal := json.Marshal(gin.H{
+	payloadBody := gin.H{
 		"model":    request.Model,
 		"messages": request.Messages,
 		"stream":   false,
-	})
+	}
+	if request.ReasoningEffort != "" {
+		payloadBody["reasoning_effort"] = request.ReasoningEffort
+	}
+	payload, errMarshal := json.Marshal(payloadBody)
 	if errMarshal != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build request"})
 		return
