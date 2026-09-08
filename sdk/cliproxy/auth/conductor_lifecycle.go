@@ -137,7 +137,10 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	auth.Success = existing.Success
 	auth.Failed = existing.Failed
 	auth.recentRequests = existing.recentRequests
-	if !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {
+	replaceRuntime := auth.ReplaceRuntimeState
+	if replaceRuntime {
+		ResetAuthRuntimeForRelogin(auth)
+	} else if !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {
 		auth.ModelStates = mergeModelStatesConservatively(existing.ModelStates, auth.ModelStates, now)
 		if existing.Quota.Exceeded && existing.Quota.Reason == "credential_quota" && existing.Quota.NextRecoverAt.After(now) {
 			auth.Unavailable = existing.Unavailable
@@ -149,8 +152,8 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		}
 	}
 	cooldownStateChanged := normalizeModelStates(auth)
-	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
-		cooldownStateChanged = clearCooldownStateForAuth(auth, now) || cooldownStateChanged
+	if replaceRuntime || m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
+		cooldownStateChanged = clearCooldownStateForAuth(auth, now) || cooldownStateChanged || replaceRuntime
 	}
 	auth.EnsureIndex()
 	authClone := auth.Clone()

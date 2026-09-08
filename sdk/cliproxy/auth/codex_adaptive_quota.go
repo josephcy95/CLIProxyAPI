@@ -237,11 +237,17 @@ func (m *Manager) probeCodexResetCredits(ctx context.Context, auth *Auth) (map[s
 	}
 	root := gjson.ParseBytes(body)
 	credits := firstUsageResult(root, "credits")
-	if !credits.Exists() || !credits.IsArray() {
+	if credits.Exists() && !credits.IsArray() {
+		return nil, fmt.Errorf("codex reset-credit probe: response contained no credits")
+	}
+	creditValue := any([]any{})
+	if credits.IsArray() {
+		creditValue = credits.Value()
+	} else if !firstUsageResult(root, "available_count", "availableCount").Exists() {
 		return nil, fmt.Errorf("codex reset-credit probe: response contained no credits")
 	}
 	updates := map[string]any{
-		"rate_limit_reset_credits":            credits.Value(),
+		"rate_limit_reset_credits":            creditValue,
 		"rate_limit_reset_credits_checked_at": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	for key, paths := range map[string][]string{

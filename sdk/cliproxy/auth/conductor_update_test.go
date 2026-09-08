@@ -97,6 +97,53 @@ func TestManager_Update_PreservesModelStates(t *testing.T) {
 	}
 }
 
+func TestManager_Update_ReplaceRuntimeStateDropsCooldown(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	until := time.Now().Add(2 * time.Hour)
+
+	if _, errRegister := m.Register(context.Background(), &Auth{
+		ID:             "codex-1",
+		Provider:       "codex",
+		Unavailable:    true,
+		NextRetryAfter: until,
+		Quota: QuotaState{
+			Exceeded:      true,
+			Reason:        "credential_quota",
+			NextRecoverAt: until,
+			Signals:       map[string]string{"X-Codex-Primary-Used-Percent": "100"},
+		},
+		ModelStates: map[string]*ModelState{
+			"gpt-5": {Unavailable: true, NextRetryAfter: until, UsageLimitCount: 3},
+		},
+		Metadata: map[string]any{"type": "codex"},
+	}); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	if _, errUpdate := m.Update(context.Background(), &Auth{
+		ID:                  "codex-1",
+		Provider:            "codex",
+		ReplaceRuntimeState: true,
+		Metadata:            map[string]any{"type": "codex", "email": "user@example.com"},
+	}); errUpdate != nil {
+		t.Fatalf("update auth: %v", errUpdate)
+	}
+
+	updated, ok := m.GetByID("codex-1")
+	if !ok || updated == nil {
+		t.Fatal("expected auth to be present")
+	}
+	if updated.Unavailable || !updated.NextRetryAfter.IsZero() || updated.Quota.Exceeded {
+		t.Fatalf("cooldown survived re-login update: unavailable=%v retry=%v quota=%+v", updated.Unavailable, updated.NextRetryAfter, updated.Quota)
+	}
+	if len(updated.Quota.Signals) != 0 {
+		t.Fatalf("quota signals survived re-login update: %#v", updated.Quota.Signals)
+	}
+	if len(updated.ModelStates) != 0 {
+		t.Fatalf("model cooldown survived re-login update: %#v", updated.ModelStates)
+	}
+}
+
 func TestManager_Update_DisabledExistingDoesNotInheritModelStates(t *testing.T) {
 	m := NewManager(nil, nil, nil)
 

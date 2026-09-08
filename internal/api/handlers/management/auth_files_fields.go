@@ -846,6 +846,7 @@ func (h *Handler) mergeExistingAuthFileMetadata(record *coreauth.Auth) {
 	if len(existingMap) > 0 {
 		coreauth.MergeExistingAuthMetadata(record, existingMap)
 	}
+	coreauth.ResetAuthRuntimeForRelogin(record)
 }
 
 func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (string, error) {
@@ -881,6 +882,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 			}
 			for _, auth := range auths {
 				if auth != nil && (auth.ID == record.ID || len(auths) == 1) {
+					auth.ReplaceRuntimeState = record.ReplaceRuntimeState
 					persistedRecord = auth
 					break
 				}

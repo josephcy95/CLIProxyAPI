@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
@@ -70,19 +71,26 @@ func TestSaveTokenRecord_PreservesExistingAuthFileSettings(t *testing.T) {
 
 	// User configured fields on existing OAuth account
 	initialContent := map[string]any{
-		"type":          "codex",
-		"email":         "user@example.com",
-		"access_token":  "old-access",
-		"refresh_token": "old-refresh",
-		"prefix":        "custom-prefix",
-		"websockets":    false,
-		"note":          "my important account",
-		"proxy_url":     "http://127.0.0.1:8080",
-		"weight":        float64(5),
-		"headers":       map[string]any{"User-Agent": "Custom"},
-		"models":        []any{"o3-mini"},
-		"thinking":      map[string]any{"enabled": true},
-		"priority":      float64(2),
+		"type":                         "codex",
+		"email":                        "user@example.com",
+		"access_token":                 "old-access",
+		"refresh_token":                "old-refresh",
+		"prefix":                       "custom-prefix",
+		"websockets":                   false,
+		"note":                         "my important account",
+		"proxy_url":                    "http://127.0.0.1:8080",
+		"weight":                       float64(5),
+		"headers":                      map[string]any{"User-Agent": "Custom"},
+		"models":                       []any{"o3-mini"},
+		"thinking":                     map[string]any{"enabled": true},
+		"priority":                     float64(2),
+		"disabled":                     true,
+		"disabled_reason":              "usage_limit_reached",
+		"next_retry_after":             time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+		"X-Codex-Primary-Used-Percent": "100",
+		"codex_quota_observed_at":      time.Now().UTC().Format(time.RFC3339Nano),
+		"rate_limit_reset_credits_available_count": 1,
+		"runtime": map[string]any{"models": map[string]any{"gpt-5": map[string]any{"reason": "quota"}}},
 	}
 	raw, errMarshal := json.Marshal(initialContent)
 	if errMarshal != nil {
@@ -170,6 +178,21 @@ func TestSaveTokenRecord_PreservesExistingAuthFileSettings(t *testing.T) {
 	}
 	if saved["priority"] != float64(2) {
 		t.Errorf("priority = %v, want 2", saved["priority"])
+	}
+	if saved["disabled"] != false {
+		t.Errorf("disabled = %v, want false after re-login", saved["disabled"])
+	}
+	for _, key := range []string{
+		"disabled_reason",
+		"next_retry_after",
+		"X-Codex-Primary-Used-Percent",
+		"codex_quota_observed_at",
+		"rate_limit_reset_credits_available_count",
+		"runtime",
+	} {
+		if _, exists := saved[key]; exists {
+			t.Errorf("%s was preserved after re-login: %#v", key, saved[key])
+		}
 	}
 }
 

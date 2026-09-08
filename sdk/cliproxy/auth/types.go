@@ -98,6 +98,10 @@ type Auth struct {
 
 	recentRequests recentRequestRing `json:"-"`
 	indexAssigned  bool              `json:"-"`
+
+	// ReplaceRuntimeState drops in-memory cooldown/quota instead of merging it
+	// when this record is registered or updated after an OAuth re-login.
+	ReplaceRuntimeState bool `json:"-"`
 }
 
 const (
