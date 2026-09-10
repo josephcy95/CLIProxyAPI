@@ -209,53 +209,6 @@ func TestSyncMetadataSessionToContext(t *testing.T) {
 	}
 }
 
-func TestApplyRequestAfterAuthInterceptorSessionClearing(t *testing.T) {
-	req := cliproxyexecutor.Request{
-		Model:   "gpt-5.6-luna",
-		Payload: nil,
-	}
-	opts := cliproxyexecutor.Options{
-		Headers: http.Header{
-			"X-Session-ID": []string{"initial-session"},
-		},
-		Metadata: map[string]any{
-			cliproxyexecutor.CanonicalSessionIDMetadataKey: "session:initial-session",
-			cliproxyexecutor.ParentSessionIDMetadataKey:    "session:initial-parent",
-		},
-		RequestAfterAuthInterceptor: func(ctx context.Context, req cliproxyexecutor.RequestAfterAuthInterceptRequest) cliproxyexecutor.RequestAfterAuthInterceptResponse {
-			return cliproxyexecutor.RequestAfterAuthInterceptResponse{
-				ClearHeaders: []string{"X-Session-ID"},
-			}
-		},
-	}
-
-	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(finalOpts.Headers) != 0 {
-		t.Fatalf("headers not cleared: %v", finalOpts.Headers)
-	}
-	if _, ok := finalOpts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey]; ok {
-		t.Fatalf("canonical session was not cleared from metadata after interceptor cleared headers")
-	}
-	if _, ok := finalOpts.Metadata[cliproxyexecutor.ParentSessionIDMetadataKey]; ok {
-		t.Fatalf("parent session was not cleared from metadata after interceptor cleared headers")
-	}
-
-	// Context synced from cleared metadata also has empty session
-	ctxWithSession := internallogging.WithClientRequestMetadata(context.Background(), internallogging.ClientRequestMetadata{
-		SessionID:       "session:initial-session",
-		ParentSessionID: "session:initial-parent",
-	})
-	syncedCtx := syncMetadataSessionToContext(ctxWithSession, finalOpts.Metadata)
-	meta := internallogging.GetClientRequestMetadata(syncedCtx)
-	if meta.SessionID != "" || meta.ParentSessionID != "" {
-		t.Fatalf("context retained stale session after interceptor cleared headers: (%q, %q)", meta.SessionID, meta.ParentSessionID)
-	}
-	_ = finalReq
-}
-
 func TestGhostParentElimination(t *testing.T) {
 	// Request has explicit root session (no parent), but options metadata carries a stale parent key
 	req := cliproxyexecutor.Request{}

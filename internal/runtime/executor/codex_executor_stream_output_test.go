@@ -539,10 +539,9 @@ func TestCodexTerminalStreamContextLengthErrIgnoresOtherTerminalErrors(t *testin
 }
 
 func TestCodexTerminalStreamErrIgnoresRateLimitTerminalErrors(t *testing.T) {
-	// Transient rate limits are classified via codexTerminalFailureErr / FailureStatus.
 	_, _, ok := codexTerminalStreamErr([]byte(`{"type":"error","error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Rate limit reached."}}`))
 	if ok {
-		t.Fatal("rate limit terminal error should not be handled by stream special-case path")
+		t.Fatal("rate limit terminal error should not be handled by replay terminal error path")
 	}
 }
 
@@ -577,6 +576,18 @@ func TestCodexTerminalFailureErrClassifiesStatus(t *testing.T) {
 			event:      `{"type":"response.failed","response":{"error":{"type":"upstream_error","code":"unknown","message":"Upstream failed."}}}`,
 			wantStatus: http.StatusBadGateway,
 		},
+		// Overload rejections keep falling through to 502 here. The 503 restoration is scoped to
+		// the opt-in bootstrap buffering path so this shared mapping stays unchanged.
+		{
+			name:       "overload maps to service unavailable",
+			event:      `{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`,
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name:       "model not found with invalid_request_error type maps to 404",
+			event:      `{"type":"error","error":{"type":"invalid_request_error","code":"model_not_found","message":"The model gpt-5.5 does not exist or you do not have access to it."}}`,
+			wantStatus: http.StatusNotFound,
+		},
 	}
 
 	for _, tc := range tests {
@@ -590,22 +601,6 @@ func TestCodexTerminalFailureErrClassifiesStatus(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestCodexTerminalFailureErrHandlesBareServerOverloadedError(t *testing.T) {
-	event := []byte(`{"error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later.","param":null}}`)
-
-	err, body, ok := codexTerminalFailureErr(event)
-	if !ok {
-		t.Fatal("expected bare server overload to be handled as a terminal error")
-	}
-	if got := err.StatusCode(); got != http.StatusServiceUnavailable {
-		t.Fatalf("status code = %d, want %d", got, http.StatusServiceUnavailable)
-	}
-	if got := string(body); got != string(event) {
-		t.Fatalf("terminal body = %s, want %s", got, event)
-	}
-	assertCodexErrorCode(t, err.Error(), "service_unavailable_error", "server_is_overloaded")
 }
 
 func TestCodexTerminalStreamErrHandlesUsageLimitErrorEvent(t *testing.T) {

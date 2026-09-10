@@ -975,7 +975,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								if effectiveRetryAfter != nil && *effectiveRetryAfter >= 0 {
 									cooldown = *effectiveRetryAfter
 								}
-								next := now.Add(cooldown)
+								next := now.Add(cooldown).Round(0)
 								state.NextRetryAfter = next
 								suspendReason = "payment_required"
 								shouldSuspendModel = true
@@ -994,7 +994,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							backoffLevel := state.Quota.BackoffLevel
 							if !disableCooling {
 								if effectiveRetryAfter != nil {
-									next = now.Add(*effectiveRetryAfter)
+									next = now.Add(*effectiveRetryAfter).Round(0)
 								} else {
 									next, backoffLevel = quotaCooldownAfterFailure(state.Quota, now)
 								}
@@ -1766,7 +1766,7 @@ func nextCloudflareCooldown(backoffLevel int, disableCooling bool, now time.Time
 			cooldown = 10 * time.Second
 		}
 		if cooldown > 0 {
-			next = now.Add(cooldown)
+			next = now.Add(cooldown).Round(0)
 		}
 		backoffLevel = nextLevel
 	}
@@ -2181,7 +2181,7 @@ func quotaCooldownAfterFailure(quota QuotaState, now time.Time) (time.Time, int)
 	cooldown, nextLevel := nextQuotaCooldown(quota.BackoffLevel, false)
 	var next time.Time
 	if cooldown > 0 {
-		next = now.Add(cooldown)
+		next = now.Add(cooldown).Round(0)
 	}
 	return next, nextLevel
 }
