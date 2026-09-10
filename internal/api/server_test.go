@@ -24,12 +24,15 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executionregistry"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"gopkg.in/yaml.v3"
 )
 
 type codexSearchCaptureExecutor struct {
@@ -42,6 +45,7 @@ type codexSearchCaptureExecutor struct {
 	statuses     []int
 	refreshCalls int
 	httpCalls    int
+	beforeReturn func()
 }
 
 func (e *codexSearchCaptureExecutor) Identifier() string { return "codex" }
@@ -139,6 +143,9 @@ func (e *codexSearchCaptureExecutor) HttpRequest(_ context.Context, selected *au
 	if e.httpCalls <= len(e.statuses) && e.statuses[e.httpCalls-1] > 0 {
 		statusCode = e.statuses[e.httpCalls-1]
 	}
+	if e.beforeReturn != nil {
+		e.beforeReturn()
+	}
 	return &http.Response{
 		StatusCode: statusCode,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -147,26 +154,71 @@ func (e *codexSearchCaptureExecutor) HttpRequest(_ context.Context, selected *au
 }
 
 type codexSearchHomeDispatcher struct {
+	authID string
 	calls  atomic.Int32
 	policy atomic.Value
+}
+
+type homeUnauthorizedUsageCapture struct {
+	authID  string
+	records chan coreusage.Record
+}
+
+func (p *homeUnauthorizedUsageCapture) HandleUsage(_ context.Context, record coreusage.Record) {
+	if p == nil || record.ExecutorType != "home-result" || record.AuthID != p.authID {
+		return
+	}
+	select {
+	case p.records <- record:
+	default:
+	}
+}
+
+func (p *homeUnauthorizedUsageCapture) wait(t *testing.T) coreusage.Record {
+	t.Helper()
+	select {
+	case record := <-p.records:
+		return record
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Home unauthorized usage record")
+		return coreusage.Record{}
+	}
+}
+
+type noopHomeUnauthorizedUsagePlugin struct{}
+
+func (noopHomeUnauthorizedUsagePlugin) HandleUsage(context.Context, coreusage.Record) {}
+
+func registerHomeUnauthorizedUsageCapture(t *testing.T, name, authID string) *homeUnauthorizedUsageCapture {
+	t.Helper()
+	capture := &homeUnauthorizedUsageCapture{authID: authID, records: make(chan coreusage.Record, 1)}
+	coreusage.RegisterNamedPlugin(name, capture)
+	t.Cleanup(func() {
+		coreusage.RegisterNamedPlugin(name, noopHomeUnauthorizedUsagePlugin{})
+	})
+	return capture
 }
 
 func (*codexSearchHomeDispatcher) HeartbeatOK() bool { return true }
 
 func (d *codexSearchHomeDispatcher) RPopAuth(_ context.Context, model string, _ string, _ http.Header, _ int) ([]byte, error) {
 	d.calls.Add(1)
+	authID := d.authID
+	if authID == "" {
+		authID = "home-codex-search"
+	}
 	return json.Marshal(map[string]any{
 		"model":      model,
-		"auth_index": "home-codex-search",
+		"auth_index": authID,
 		"auth": map[string]any{
-			"id":       "home-codex-search",
+			"id":       authID,
 			"provider": "codex",
 			"status":   "active",
 			"metadata": map[string]any{"access_token": "home-search-token"},
 		},
 		"concurrency": map[string]any{
 			"accounted":     true,
-			"credential_id": "home-codex-search",
+			"credential_id": authID,
 			"model":         model,
 		},
 	})
@@ -196,6 +248,24 @@ type trackedSearchResponseBody struct {
 }
 
 func (b *trackedSearchResponseBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+type errorSearchResponseBody struct {
+	payload []byte
+	read    atomic.Bool
+	closed  atomic.Bool
+}
+
+func (b *errorSearchResponseBody) Read(p []byte) (int, error) {
+	if !b.read.CompareAndSwap(false, true) {
+		return 0, io.EOF
+	}
+	return copy(p, b.payload), io.ErrUnexpectedEOF
+}
+
+func (b *errorSearchResponseBody) Close() error {
 	b.closed.Store(true)
 	return nil
 }
@@ -322,6 +392,140 @@ func TestAuditHomeCodexSearchBodyCloseBeforeRelease(t *testing.T) {
 	}
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestHomeCodexAlphaSearchForwardsUnauthorizedResponseWithoutRefresh(t *testing.T) {
+	const upstreamError = `{"error":{"message":"access token expired"}}`
+	server := newTestServer(t)
+	server.cfg.RequestLog = true
+	dispatcher := &codexSearchHomeDispatcher{}
+	server.handlers.AuthManager.SetConfig(&proxyconfig.Config{Home: proxyconfig.HomeConfig{Enabled: true}})
+	server.handlers.AuthManager.PublishHomeDispatch(dispatcher, executionregistry.New(), 1)
+	executor := &codexSearchCaptureExecutor{
+		statuses:     []int{http.StatusUnauthorized},
+		responseBody: io.NopCloser(strings.NewReader(upstreamError)),
+	}
+	server.handlers.AuthManager.RegisterExecutor(executor)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"id":"home-search-refresh","model":"gpt-5-codex","query":"test"}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	rr := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rr)
+	c.Request = req
+	server.codexAlphaSearch(c)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusUnauthorized, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != upstreamError {
+		t.Fatalf("body = %q, want original upstream error %q", got, upstreamError)
+	}
+	if executor.refreshCalls != 0 || executor.httpCalls != 1 {
+		t.Fatalf("refresh/http calls = %d/%d, want 0/1", executor.refreshCalls, executor.httpCalls)
+	}
+	if got := executor.request.Header.Get("Authorization"); got != "Bearer home-search-token" {
+		t.Fatalf("Authorization = %q, want original Home token", got)
+	}
+	if got := dispatcher.calls.Load(); got != 1 {
+		t.Fatalf("Home RPOP calls = %d, want 1", got)
+	}
+	rawAPIResponse, okResponse := c.Get("API_RESPONSE")
+	if !okResponse {
+		t.Fatal("API_RESPONSE was not captured")
+	}
+	apiResponse, _ := rawAPIResponse.([]byte)
+	if !strings.Contains(string(apiResponse), "Status: 401") || !strings.Contains(string(apiResponse), upstreamError) {
+		t.Fatalf("API_RESPONSE = %q, want original upstream 401", apiResponse)
+	}
+}
+
+func TestHomeCodexAlphaSearchReportsUnauthorizedBeforeEarlyReturn(t *testing.T) {
+	const upstreamError = `{"error":{"message":"access token expired"}}`
+	tests := []struct {
+		name         string
+		responseBody func() io.ReadCloser
+		beforeReturn func(*executionregistry.Registry)
+		wantStatus   int
+		wantFailBody string
+	}{
+		{
+			name: "response bind failure",
+			responseBody: func() io.ReadCloser {
+				return &trackedSearchResponseBody{Reader: strings.NewReader(upstreamError)}
+			},
+			beforeReturn: func(registry *executionregistry.Registry) {
+				_ = registry.Close()
+			},
+			wantStatus:   http.StatusServiceUnavailable,
+			wantFailBody: "upstream unauthorized",
+		},
+		{
+			name: "response read failure",
+			responseBody: func() io.ReadCloser {
+				return &errorSearchResponseBody{payload: []byte(upstreamError)}
+			},
+			wantStatus:   http.StatusBadGateway,
+			wantFailBody: upstreamError,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newTestServer(t)
+			registry := executionregistry.New()
+			server.handlers.AuthManager.SetConfig(&proxyconfig.Config{Home: proxyconfig.HomeConfig{Enabled: true}})
+			testAuthID := "home-codex-search-" + strings.ReplaceAll(test.name, " ", "-")
+			server.handlers.AuthManager.PublishHomeDispatch(&codexSearchHomeDispatcher{authID: testAuthID}, registry, 1)
+			executor := &codexSearchCaptureExecutor{
+				statuses:     []int{http.StatusUnauthorized},
+				responseBody: test.responseBody(),
+			}
+			if test.beforeReturn != nil {
+				executor.beforeReturn = func() { test.beforeReturn(registry) }
+			}
+			server.handlers.AuthManager.RegisterExecutor(executor)
+			usageCapture := registerHomeUnauthorizedUsageCapture(t, t.Name(), testAuthID)
+
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5-codex","query":"test"}`))
+			request.Header.Set("Authorization", "Bearer test-key")
+			server.engine.ServeHTTP(recorder, request)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+			record := usageCapture.wait(t)
+			if record.Fail.StatusCode != http.StatusUnauthorized || record.Fail.Body != test.wantFailBody {
+				t.Fatalf("Home unauthorized failure = status %d body %q, want status 401 body %q", record.Fail.StatusCode, record.Fail.Body, test.wantFailBody)
+			}
+		})
+	}
+}
+
+func TestHomeCodexAlphaSearchRequestLogPreservesBodyReturnedWithReadError(t *testing.T) {
+	const upstreamError = `{"error":{"message":"access token expired"}}`
+	server := newTestServer(t)
+	server.cfg.RequestLog = true
+	server.handlers.AuthManager.SetConfig(&proxyconfig.Config{Home: proxyconfig.HomeConfig{Enabled: true}})
+	server.handlers.AuthManager.PublishHomeDispatch(&codexSearchHomeDispatcher{}, executionregistry.New(), 1)
+	server.handlers.AuthManager.RegisterExecutor(&codexSearchCaptureExecutor{
+		statuses:     []int{http.StatusUnauthorized},
+		responseBody: &errorSearchResponseBody{payload: []byte(upstreamError)},
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5-codex","query":"test"}`))
+	server.codexAlphaSearch(c)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	rawAPIResponse, okResponse := c.Get("API_RESPONSE")
+	apiResponse, _ := rawAPIResponse.([]byte)
+	if !okResponse || !strings.Contains(string(apiResponse), upstreamError) || !strings.Contains(string(apiResponse), io.ErrUnexpectedEOF.Error()) {
+		t.Fatalf("API_RESPONSE = %q, want upstream body and read error", apiResponse)
 	}
 }
 
@@ -1672,12 +1876,10 @@ func TestModelsDispatchByAnthropicVersionHeader(t *testing.T) {
 			MaxCompletionTokens: 64000,
 		},
 		{
-			ID:            "gpt-4o",
-			Object:        "model",
-			OwnedBy:       "openai",
-			Type:          "openai",
-			ContextLength: 128000,
-			Thinking:      &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}},
+			ID:      "gpt-4o",
+			Object:  "model",
+			OwnedBy: "openai",
+			Type:    "openai",
 		},
 	})
 	t.Cleanup(func() {
@@ -1769,19 +1971,6 @@ func TestModelsDispatchByAnthropicVersionHeader(t *testing.T) {
 			}
 			if id, _ := m["id"].(string); id == "gpt-4o" {
 				foundRawGPT = true
-				if got, ok := m["context_window"].(float64); !ok || got != 128000 {
-					t.Fatalf("context_window = %v, want 128000", m["context_window"])
-				}
-				if got, ok := m["max_context_window"].(float64); !ok || got != 128000 {
-					t.Fatalf("max_context_window = %v, want 128000", m["max_context_window"])
-				}
-				levels, ok := m["supported_reasoning_levels"].([]any)
-				if !ok || len(levels) != 3 || levels[1] != "medium" {
-					t.Fatalf("supported_reasoning_levels = %v, want [low medium high]", m["supported_reasoning_levels"])
-				}
-				if got, _ := m["default_reasoning_level"].(string); got != "medium" {
-					t.Fatalf("default_reasoning_level = %q, want medium", got)
-				}
 			}
 			if id, _ := m["id"].(string); id == "claude-gpt-4o" || id == "claude-fable-5-dd-o4-tpg" {
 				t.Fatalf("did not expect Anthropic id rewrite on OpenAI format models, got %v", m)
@@ -1871,6 +2060,9 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 		},
 		{ID: "grok-imagine-image-quality", Object: "model", OwnedBy: "xai", Type: "openai"},
 		{ID: "gpt-image-2", Object: "model", OwnedBy: "openai", Type: "openai"},
+		{ID: "gpt-image-2.5-flare", Object: "model", OwnedBy: "openai", Type: "openai"},
+		{ID: "gpt-image-2.5-sunburst", Object: "model", OwnedBy: "openai", Type: "openai"},
+		{ID: "gpt-image-2.5", Object: "model", OwnedBy: "openai", Type: "openai"},
 		{ID: "grok-imagine-image", Object: "model", OwnedBy: "xai", Type: "openai"},
 		{ID: "grok-imagine-image-2.0", Object: "model", OwnedBy: "xai", Type: "openai"},
 		{ID: "grok-imagine-video", Object: "model", OwnedBy: "xai", Type: "openai"},
@@ -1975,6 +2167,9 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 	hiddenModels := map[string]bool{
 		"grok-imagine-image-quality":     false,
 		"gpt-image-2":                    false,
+		"gpt-image-2.5-flare":            false,
+		"gpt-image-2.5-sunburst":         false,
+		"gpt-image-2.5":                  false,
 		"grok-imagine-image":             false,
 		"grok-imagine-image-2.0":         false,
 		"grok-imagine-video":             false,
@@ -2180,12 +2375,33 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 	t.Setenv("WRITABLE_PATH", "")
 	t.Setenv("writable_path", "")
 
-	tmpDir := t.TempDir()
-	t.Setenv("CLIPROXY_DATA_DIR", tmpDir)
-	t.Setenv("CLI_PROXY_DATA_DIR", "")
+	originalWD, errGetwd := os.Getwd()
+	if errGetwd != nil {
+		t.Fatalf("failed to get current working directory: %v", errGetwd)
+	}
 
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	authDir := filepath.Join(tmpDir, "auths")
+	tmpDir := t.TempDir()
+	if errChdir := os.Chdir(tmpDir); errChdir != nil {
+		t.Fatalf("failed to switch working directory: %v", errChdir)
+	}
+	defer func() {
+		if errChdirBack := os.Chdir(originalWD); errChdirBack != nil {
+			t.Fatalf("failed to restore working directory: %v", errChdirBack)
+		}
+	}()
+
+	// Force ResolveLogDirectory to fallback to auth-dir/logs by making ./logs not a writable directory.
+	if errWriteFile := os.WriteFile(filepath.Join(tmpDir, "logs"), []byte("not-a-directory"), 0o644); errWriteFile != nil {
+		t.Fatalf("failed to create blocking logs file: %v", errWriteFile)
+	}
+
+	configDir := filepath.Join(tmpDir, "config")
+	if errMkdirConfig := os.MkdirAll(configDir, 0o755); errMkdirConfig != nil {
+		t.Fatalf("failed to create config dir: %v", errMkdirConfig)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+
+	authDir := filepath.Join(tmpDir, "auth")
 	if errMkdirAuth := os.MkdirAll(authDir, 0o700); errMkdirAuth != nil {
 		t.Fatalf("failed to create auth dir: %v", errMkdirAuth)
 	}
@@ -2226,30 +2442,30 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 		t.Fatalf("failed to write forced error request log: %v", errLog)
 	}
 
-	dataLogsDir := filepath.Join(tmpDir, "logs")
-	dataEntries, errReadDataDir := os.ReadDir(dataLogsDir)
-	if errReadDataDir != nil {
-		t.Fatalf("failed to read data logs dir %s: %v", dataLogsDir, errReadDataDir)
+	authLogsDir := filepath.Join(authDir, "logs")
+	authEntries, errReadAuthDir := os.ReadDir(authLogsDir)
+	if errReadAuthDir != nil {
+		t.Fatalf("failed to read auth logs dir %s: %v", authLogsDir, errReadAuthDir)
 	}
-	foundErrorLogInDataDir := false
-	for _, entry := range dataEntries {
+	foundErrorLogInAuthDir := false
+	for _, entry := range authEntries {
 		if strings.HasPrefix(entry.Name(), "error-") && strings.HasSuffix(entry.Name(), ".log") {
-			foundErrorLogInDataDir = true
+			foundErrorLogInAuthDir = true
 			break
 		}
 	}
-	if !foundErrorLogInDataDir {
-		t.Fatalf("expected forced error log in data logs dir %s, got entries: %+v", dataLogsDir, dataEntries)
+	if !foundErrorLogInAuthDir {
+		t.Fatalf("expected forced error log in auth fallback dir %s, got entries: %+v", authLogsDir, authEntries)
 	}
 
-	authLogsDir := filepath.Join(authDir, "logs")
-	authEntries, errReadAuthDir := os.ReadDir(authLogsDir)
-	if errReadAuthDir != nil && !os.IsNotExist(errReadAuthDir) {
-		t.Fatalf("failed to inspect auth logs dir %s: %v", authLogsDir, errReadAuthDir)
+	configLogsDir := filepath.Join(configDir, "logs")
+	configEntries, errReadConfigDir := os.ReadDir(configLogsDir)
+	if errReadConfigDir != nil && !os.IsNotExist(errReadConfigDir) {
+		t.Fatalf("failed to inspect config logs dir %s: %v", configLogsDir, errReadConfigDir)
 	}
-	for _, entry := range authEntries {
+	for _, entry := range configEntries {
 		if strings.HasPrefix(entry.Name(), "error-") && strings.HasSuffix(entry.Name(), ".log") {
-			t.Fatalf("unexpected forced error log in auth dir %s", authLogsDir)
+			t.Fatalf("unexpected forced error log in config dir %s", configLogsDir)
 		}
 	}
 }
@@ -2409,11 +2625,54 @@ func TestInteractionsRouteRegistered(t *testing.T) {
 	}
 }
 
-// managementRouteContract lists every management route the web UI depends on.
-// An upstream refactor that relocates route registration can silently drop
-// entries (this happened once: the monitoring endpoints disappeared and the UI
-// started 404ing), so pin the contract here. Add new routes as they ship; only
-// remove an entry when the endpoint is intentionally retired.
+func TestUpdateClientsContext_AntigravityConnectionPoolPurgesTransports(t *testing.T) {
+	server := newTestServer(t)
+
+	enabled := true
+	disabled := false
+
+	cfg1 := *server.cfg
+	cfg1.Antigravity.ConnectionPool.Enabled = &enabled
+	cfg1.Antigravity.ConnectionPool.IdleConnTimeout = "30s"
+	server.oldConfigYaml, _ = yaml.Marshal(&cfg1)
+
+	// Pre-populate the cache before reload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	testAuth := &auth.Auth{
+		ID:         "hot-reload-test-auth",
+		Provider:   "antigravity",
+		Attributes: map[string]string{"base_url": srv.URL},
+		Metadata: map[string]any{
+			"access_token": "token",
+			"project_id":   "proj",
+			"expired":      time.Now().Add(time.Hour).Format(time.RFC3339),
+		},
+	}
+	exec := executor.NewAntigravityExecutor(&cfg1)
+	req := httptest.NewRequest(http.MethodGet, srv.URL, nil)
+	_, _ = exec.HttpRequest(context.Background(), testAuth, req)
+
+	if executor.AntigravityTransportsLen() == 0 {
+		t.Fatal("expected Antigravity transports to be cached before hot reload")
+	}
+
+	cfg2 := cfg1
+	cfg2.Antigravity.ConnectionPool.Enabled = &disabled
+	cfg2.Antigravity.ConnectionPool.IdleConnTimeout = "10s"
+
+	if ok := server.UpdateClientsContext(context.Background(), &cfg2); !ok {
+		t.Fatal("UpdateClientsContext returned false")
+	}
+
+	if got := executor.AntigravityTransportsLen(); got != 0 {
+		t.Fatalf("AntigravityTransportsLen() after reload = %d, want 0", got)
+	}
+}
+
 var managementRouteContract = []struct {
 	method string
 	path   string
