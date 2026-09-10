@@ -765,9 +765,12 @@ func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []
 		}
 		thinkingSupport := model.Thinking
 		if thinkingSupport == nil && !model.Image {
-			// Keep the metadata-from-catalog result when it exists, and only
-			// fall back to the generic level set when nothing was resolved.
-			if info.Thinking == nil {
+			// A custom endpoint speaks the OpenAI reasoning_effort shape, so the
+			// generic level set remains the default unless the catalog resolved
+			// selectable levels for this name. A budget-shaped static entry
+			// resolves no levels and would otherwise advertise none at all,
+			// changing the default effort this path has always sent.
+			if info.Thinking == nil || len(info.Thinking.Levels) == 0 {
 				thinkingSupport = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
 			}
 		}
@@ -853,7 +856,7 @@ func mergeResolvedModelInfo(info, resolved *ModelInfo) {
 	if info.MaxCompletionTokens <= 0 && resolved.MaxCompletionTokens > 0 {
 		info.MaxCompletionTokens = resolved.MaxCompletionTokens
 	}
-	if info.Thinking == nil && resolved.Thinking != nil && len(resolved.Thinking.Levels) > 0 {
+	if info.Thinking == nil && resolved.Thinking != nil {
 		info.Thinking = resolved.Thinking
 	}
 	if len(info.SupportedInputModalities) == 0 && len(resolved.SupportedInputModalities) > 0 {

@@ -85,18 +85,40 @@ func TestConfiguredThinkingWinsOverCatalogFallback(t *testing.T) {
 	}
 }
 
-func TestConfigModelsFillMissingLevelsForBudgetOnlyStaticModel(t *testing.T) {
-	// The antigravity catalog describes this model with a thinking budget range
-	// but no levels, which previously left it with an empty level list.
-	models := buildCodexConfigModels(&config.CodexKey{
-		Models: []config.CodexModel{{Name: "claude-opus-4-6-thinking"}},
-	})
-	if len(models) != 1 {
-		t.Fatalf("got %d models, want 1", len(models))
+func TestConfigModelsKeepBudgetOnlyThinkingShape(t *testing.T) {
+	// Budget-only static entries must survive configuration untouched. Their
+	// empty level list tells the provider appliers to emit thinkingBudget, so
+	// catalog levels must not be injected here.
+	cases := []struct {
+		label string
+		got   func() *ModelInfo
+	}{
+		{"codex/claude-opus-4-6-thinking", func() *ModelInfo {
+			return buildCodexConfigModels(&config.CodexKey{
+				Models: []config.CodexModel{{Name: "claude-opus-4-6-thinking"}},
+			})[0]
+		}},
+		{"gemini/gemini-2.5-flash", func() *ModelInfo {
+			return buildGeminiConfigModels(&config.GeminiKey{
+				Models: []config.GeminiModel{{Name: "gemini-2.5-flash"}},
+			})[0]
+		}},
+		{"claude/claude-opus-4-5-20251101", func() *ModelInfo {
+			return buildClaudeConfigModels(&config.ClaudeKey{
+				Models: []config.ClaudeModel{{Name: "claude-opus-4-5-20251101"}},
+			})[0]
+		}},
 	}
-	thinking := models[0].Thinking
-	if thinking == nil || len(thinking.Levels) == 0 {
-		t.Fatalf("thinking = %+v, want levels filled from the catalog fallback", thinking)
+	for _, testCase := range cases {
+		t.Run(testCase.label, func(t *testing.T) {
+			model := testCase.got()
+			if model == nil {
+				t.Fatal("model = nil")
+			}
+			if model.Thinking != nil && len(model.Thinking.Levels) > 0 {
+				t.Fatalf("levels = %v, want none so the model keeps its budget format", model.Thinking.Levels)
+			}
+		})
 	}
 }
 
@@ -117,5 +139,32 @@ func TestConfigModelsResolveCatalogFallbackThroughAlias(t *testing.T) {
 	}
 	if models[0].ContextLength <= 0 {
 		t.Errorf("context length = %d, want the aliased model's catalog value", models[0].ContextLength)
+	}
+}
+
+func TestOpenAICompatModelsKeepGenericLevelsForBudgetShapedNames(t *testing.T) {
+	// A custom endpoint speaks the OpenAI reasoning_effort shape, so a name
+	// that happens to match a budget-shaped static entry must keep the generic
+	// level set this path has always advertised; otherwise the default effort
+	// it sends would silently change. The catalog still supplies the limits.
+	models := buildOpenAICompatibilityConfigModels(&config.OpenAICompatibility{
+		Name: "gateway",
+		Models: []config.OpenAICompatibilityModel{
+			{Name: "gemini-2.5-flash"},
+			{Name: "claude-opus-4-5-20251101"},
+		},
+	})
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+	for _, model := range models {
+		t.Run(model.ID, func(t *testing.T) {
+			if model.Thinking == nil || len(model.Thinking.Levels) == 0 {
+				t.Fatalf("thinking = %+v, want the generic level set preserved", model.Thinking)
+			}
+			if model.ContextLength <= 0 {
+				t.Errorf("context length = %d, want a catalog value", model.ContextLength)
+			}
+		})
 	}
 }

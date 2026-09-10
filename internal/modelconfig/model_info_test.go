@@ -119,9 +119,11 @@ func TestResolveModelInfoExplicitThinkingWinsOverCatalogFallback(t *testing.T) {
 	}
 }
 
-func TestResolveModelInfoFillsLevelsForBudgetOnlyStaticModel(t *testing.T) {
-	// Claude's thinking variants are described by a budget range with no levels,
-	// so the level list stayed empty and clients could not select an effort.
+func TestResolveModelInfoLeavesBudgetOnlyStaticModelAlone(t *testing.T) {
+	// claude-opus-4-6-thinking describes thinking as a budget range with no
+	// levels. That empty list is deliberate: the provider appliers switch their
+	// output format on it, so injecting catalog levels would flip the wire
+	// format and bypass the Claude budget clamping.
 	info := ResolveModelInfo("claude-opus-4-6-thinking", "openai", nil)
 	if info == nil {
 		t.Fatal("ResolveModelInfo() = nil")
@@ -129,7 +131,21 @@ func TestResolveModelInfoFillsLevelsForBudgetOnlyStaticModel(t *testing.T) {
 	if info.ContextLength != 200000 {
 		t.Errorf("context length = %d, want the static catalog value to win", info.ContextLength)
 	}
-	if info.Thinking == nil || len(info.Thinking.Levels) == 0 {
-		t.Fatalf("thinking = %+v, want catalog levels filling the empty list", info.Thinking)
+	if info.Thinking == nil {
+		t.Fatal("budget-only thinking support must survive resolution")
+	}
+	if len(info.Thinking.Levels) != 0 {
+		t.Fatalf("levels = %v, want none so the model keeps its budget format", info.Thinking.Levels)
+	}
+}
+
+func TestResolveModelInfoLeavesBudgetOnlyGeminiModelAlone(t *testing.T) {
+	// The same rule protects Gemini 2.5, which only accepts thinkingBudget.
+	info := ResolveModelInfo("gemini-2.5-flash", "gemini", nil)
+	if info == nil {
+		t.Fatal("ResolveModelInfo() = nil")
+	}
+	if info.Thinking != nil && len(info.Thinking.Levels) > 0 {
+		t.Fatalf("levels = %v, want none so Gemini 2.5 keeps thinkingBudget", info.Thinking.Levels)
 	}
 }

@@ -62,31 +62,25 @@ func applyCatalogFallback(info *registry.ModelInfo, candidates ...string) {
 	mergeCatalogFallbackLevels(info, entry.Efforts)
 }
 
-// mergeCatalogFallbackLevels adds reasoning levels when the model advertises
-// none. A static entry can describe thinking as a budget range only, which
-// leaves the level list empty and therefore unselectable for clients; the
-// catalog levels fill that gap. Explicit configuration is applied afterwards
+// mergeCatalogFallbackLevels adds reasoning levels only to a model that carries
+// no thinking metadata at all.
+//
+// A model whose capability entry already exists but lists no levels is
+// deliberately budget-shaped: the provider appliers switch their output format
+// on this exact condition (Gemini 2.5 uses thinkingBudget while Gemini 3.x uses
+// thinkingLevel, and Claude adaptive effort requires levels). Injecting catalog
+// levels there would flip the wire format and send an unsupported field, so
+// such a model is left untouched. Explicit configuration is applied afterwards
 // and still wins.
 func mergeCatalogFallbackLevels(info *registry.ModelInfo, efforts []string) {
-	if info == nil || len(efforts) == 0 {
+	if info == nil || info.Thinking != nil || len(efforts) == 0 {
 		return
 	}
 	fromCatalog := NormalizeThinkingSupport(&registry.ThinkingSupport{Levels: efforts})
 	if fromCatalog == nil || len(fromCatalog.Levels) == 0 {
 		return
 	}
-	if info.Thinking == nil {
-		info.Thinking = fromCatalog
-		return
-	}
-	if len(info.Thinking.Levels) > 0 {
-		return
-	}
-	merged := *info.Thinking
-	merged.Levels = fromCatalog.Levels
-	merged.ZeroAllowed = merged.ZeroAllowed || fromCatalog.ZeroAllowed
-	merged.DynamicAllowed = merged.DynamicAllowed || fromCatalog.DynamicAllowed
-	info.Thinking = &merged
+	info.Thinking = fromCatalog
 }
 
 // lookupCatalogFallbackEntry returns the first fallback entry matching any
