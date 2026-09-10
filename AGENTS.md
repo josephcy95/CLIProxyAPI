@@ -18,13 +18,25 @@ This fork exists for **custom behavior**. Upstream is for bug fixes and additive
 - `--no-commit` still applies every clean upstream change to the index; it only pauses before creating the commit. Automatic merges require the same semantic review as textual conflicts.
 - Do not create the merge commit until every resulting API change has passed the fork-preservation gate below. After merge: `gofmt`, `go mod tidy` if needed, compile, run targeted tests, then ship only per ship policy.
 
+### Upstream commit categories (mandatory)
+
+Before retaining any upstream change, classify it into exactly one primary bucket. Record the bucket in the path/function ledger. This is the tie-breaker when “prefer upstream” and “preserve the fork” seem to conflict:
+
+| Bucket | What it is | Default action |
+|---|---|---|
+| **1. Protocol / client tracking** | Mimicking real provider clients (Codex/Claude/Gemini/Antigravity/etc.): wire format, headers, payloads, auth handshake, retries, model lists, websocket/streaming quirks, API compatibility | **Prefer upstream.** Upstream tracks live client behaviour more closely than this fork. Take it as the base and re-apply fork hooks onto it. |
+| **2. Features** | New product capability, QoL, architecture that is not required to mimic a client | **Merge if it does not conflict** with fork-owned behaviour. **Ask the user** if it looks useless, speculative, or conflicts with a fork custom feature. If the fork already has the same capability in a **superior** way, **keep the fork implementation** — you may learn from upstream to optimise ours, but never regress or replace ours with an inferior upstream version. |
+| **3. Sponsor / promo** | Ads, sponsor badges, donate/paywall chrome, forced attribution, sponsor-only providers/routes, marketing splash, or code whose purpose is sponsorship/promotion | **Never merge.** Drop it entirely. Do not ask unless the user explicitly wants sponsor content. |
+
+Tie-breaker in one line: **protocol → upstream wins; product/QoL feature → fork wins when equal or better; sponsor → always drop.**
+
 ### Sync intent: upstream protocol authority
 
-When the user says “sync with upstream”, interpret it as a real merge where upstream is the authority for provider/client protocol behavior. The upstream maintainer tracks current client wire behavior more closely; prefer upstream implementations for Codex/Claude/Gemini/Antigravity protocol emulation, headers, payload translation, retries, and API compatibility.
+When the user says “sync with upstream”, interpret it as a real merge whose **primary goal** is bucket 1 — provider/client protocol behaviour. Prefer upstream implementations for Codex/Claude/Gemini/Antigravity protocol emulation, headers, payload translation, retries, and API compatibility.
 
-The fork is primarily for QoL and user-facing features, fork-specific configuration/deployment, management UI integration, providers not accepted upstream, and other deliberate product behavior. Preserve those fork features, but do not preserve an older fork implementation merely because it differs from upstream. For shared code, use upstream as the base and deliberately reapply or combine only the fork-owned behavior that remains required.
+The fork is primarily for QoL and user-facing features, fork-specific configuration/deployment, management UI integration, providers not accepted upstream, and other deliberate product behaviour (bucket 2). Preserve those. Do **not** keep an older fork protocol implementation merely because it differs from upstream — for shared **protocol** code, use upstream as the base and deliberately re-apply only the fork-owned product behaviour that remains required.
 
-For auth lifecycle, persistence, scheduling, and concurrency, upstream may replace the fork implementation when it provides the newer architecture; port fork-specific hooks and policies into that architecture rather than reverting to the older fork code. Validate that Qoder/Qoder CN, Codex private-instructions, xAI/Codex failure policy, usage monitoring, management routes/assets, model-context overrides, and the single data-root behavior survive.
+For auth lifecycle, persistence, scheduling, and concurrency: if upstream’s change is **protocol-driven or clearly more robust architecture** (still bucket 1 / robust bucket 2), it may replace the fork implementation — port fork-specific hooks and policies into that architecture rather than reverting to older fork code. If the fork’s version is already superior for our product needs, keep ours and ask before swapping. Validate that Qoder/Qoder CN, Codex private-instructions, xAI/Codex failure policy, usage monitoring, management routes/assets, model-context overrides, and the single data-root behaviour survive.
 
 ### API fork-preservation gate (mandatory before committing an upstream merge)
 1. Start from a clean worktree, record the pre-merge commit, fetch upstream, and perform a no-commit merge. Review the complete resulting diff against the recorded commit, including non-conflicting automatic changes, file deletions, renames, and splits.
@@ -37,7 +49,7 @@ Mechanical release gate:
 - Explicitly read this file and `../AGENTS.md` before fetching or merging.
 - Record `PRE=$(git rev-parse HEAD)` and inspect the uncommitted result with `git diff --cached "$PRE"`. Never use `git diff "$PRE" HEAD` for this purpose because `HEAD` is still the pre-merge commit.
 - After resolving or combining changes, inspect `git status --short`, `git diff`, and `git diff --cached`. Stage the intended final result, then rerun `git diff --cached "$PRE"`; never review or commit the initial staged merge while fork corrections remain unstaged.
-- Maintain a complete path/function ledger: upstream behavior, fork ownership, retain/exclude/combine decision, and proof/test. No changed path or function may remain unclassified.
+- Maintain a complete path/function ledger: **category bucket (1/2/3)**, upstream behavior, fork ownership, retain/exclude/combine decision, and proof/test. No changed path or function may remain unclassified. Bucket-3 rows must be exclude.
 - Before merging, identify files changed on both sides from the merge base; all are mandatory manual review even without conflicts.
 - More than 20 changed files, more than 500 changed lines, or any protected subsystem requires a second read-only staged-index audit before commit.
 - Do not pipe `go test` or `go build` through output filters. Release checks must preserve the actual command exit code.
@@ -46,14 +58,18 @@ Mechanical release gate:
 
 If the gate finds a removed, changed, or unproven fork behavior, restore/combine the fork implementation before committing, or abort the merge. Never commit an unsafe merge expecting a later revert to repair it.
 
-**Upstream may replace fork code only when** it fixes the same broken path, implements the same feature more robustly without dropping fork semantics, or is security/deploy-blocking in that area.
+**Upstream may replace fork code only when** it is bucket-1 protocol tracking, fixes the same broken path, implements the same feature more robustly **without** dropping fork semantics or regressing a superior fork feature, or is security/deploy-blocking in that area. Upstream must never replace a superior fork feature “because upstream differs.”
 
 **Stop and ask the user first** before accepting upstream that:
-- refactors or rewrites fork-owned behavior without a clear bug fix
+- is a bucket-2 feature that looks useless, speculative, or conflicts with fork custom work
+- would replace a fork feature the fork already implements as well or better
+- refactors or rewrites fork-owned product behaviour without a clear bug fix / protocol need
 - would drop or break any item under “Fork features to preserve”
 - is large/ambiguous and you cannot prove fork features still work
 
-On conflicts: **keep fork features** by default; take upstream only for the narrow cases above; combine when both matter. Never resolve by taking an entire upstream file/function, deleting fork-only files, or silently dropping selection filters / routes.
+**Never merge bucket-3 sponsor/promo content** (see category table). Do not treat “clean merge” or “small diff” as permission to keep sponsor code.
+
+On conflicts: apply the category tie-breaker. For bucket 2, **keep fork features** by default; take upstream only for the narrow cases above; combine when both matter. Never resolve by taking an entire upstream file/function, deleting fork-only files, or silently dropping selection filters / routes.
 
 - **File splits are high-risk.** Upstream regularly splits large files (`service.go`, `conductor.go`, `config.go`, `server.go`, `auth_files.go`, provider executors) into `*_topic.go`. A clean compile does **not** mean fork logic survived — switch cases, route tables, and call sites can disappear silently.
 - After any upstream merge that touches those areas, diff pre-merge vs HEAD for:
@@ -90,7 +106,8 @@ On conflicts: **keep fork features** by default; take upstream only for the narr
 - Model context overrides (`model-context-overrides` management API + registry apply path)
 - Single data root (`CLIPROXY_DATA_DIR`, default `/data`): config/auths/logs/plugins/usage.db under one mount
 - Fork-owned management UI acquisition: `DefaultPanelGitHubRepository`, updater release/fallback URLs, stale upstream-default migration, and the cached/served `management.html` must resolve to `josephcy95/Cli-Proxy-API-Management-Center`
-- Primary Chinese README / fork README choices; do not reintroduce removed promo assets without ask
+- Primary Chinese README / fork README choices
+- **No sponsor/promo content** — never reintroduce ads, sponsor badges, donate chrome, forced attribution, or marketing splash from upstream
 
 ### Regression pins (keep these green)
 - `TestManagementRoutesAreRegistered` — management routes the UI depends on
