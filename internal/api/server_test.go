@@ -2302,25 +2302,18 @@ func assertCodexSupportedReasoningLevels(t *testing.T, model map[string]any, wan
 func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 	t.Setenv("WRITABLE_PATH", "")
 	t.Setenv("writable_path", "")
-
-	originalWD, errGetwd := os.Getwd()
-	if errGetwd != nil {
-		t.Fatalf("failed to get current working directory: %v", errGetwd)
-	}
+	t.Setenv("CLI_PROXY_DATA_DIR", "")
 
 	tmpDir := t.TempDir()
-	if errChdir := os.Chdir(tmpDir); errChdir != nil {
-		t.Fatalf("failed to switch working directory: %v", errChdir)
+	dataDir := filepath.Join(tmpDir, "data")
+	if errMkdirData := os.MkdirAll(dataDir, 0o755); errMkdirData != nil {
+		t.Fatalf("failed to create data dir: %v", errMkdirData)
 	}
-	defer func() {
-		if errChdirBack := os.Chdir(originalWD); errChdirBack != nil {
-			t.Fatalf("failed to restore working directory: %v", errChdirBack)
-		}
-	}()
+	t.Setenv("CLIPROXY_DATA_DIR", dataDir)
 
-	// Force ResolveLogDirectory to fallback to auth-dir/logs by making ./logs not a writable directory.
-	if errWriteFile := os.WriteFile(filepath.Join(tmpDir, "logs"), []byte("not-a-directory"), 0o644); errWriteFile != nil {
-		t.Fatalf("failed to create blocking logs file: %v", errWriteFile)
+	wantLogsDir := internallogging.ResolveLogDirectory(nil)
+	if wantLogsDir != filepath.Join(dataDir, "logs") {
+		t.Fatalf("ResolveLogDirectory() = %q, want %q", wantLogsDir, filepath.Join(dataDir, "logs"))
 	}
 
 	configDir := filepath.Join(tmpDir, "config")
@@ -2329,16 +2322,10 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 	}
 	configPath := filepath.Join(configDir, "config.yaml")
 
-	authDir := filepath.Join(tmpDir, "auth")
-	if errMkdirAuth := os.MkdirAll(authDir, 0o700); errMkdirAuth != nil {
-		t.Fatalf("failed to create auth dir: %v", errMkdirAuth)
-	}
-
 	cfg := &proxyconfig.Config{
 		SDKConfig: proxyconfig.SDKConfig{
 			RequestLog: false,
 		},
-		AuthDir:           authDir,
 		ErrorLogsMaxFiles: 10,
 	}
 
@@ -2370,20 +2357,19 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 		t.Fatalf("failed to write forced error request log: %v", errLog)
 	}
 
-	authLogsDir := filepath.Join(authDir, "logs")
-	authEntries, errReadAuthDir := os.ReadDir(authLogsDir)
-	if errReadAuthDir != nil {
-		t.Fatalf("failed to read auth logs dir %s: %v", authLogsDir, errReadAuthDir)
+	dataEntries, errReadDataDir := os.ReadDir(wantLogsDir)
+	if errReadDataDir != nil {
+		t.Fatalf("failed to read resolved logs dir %s: %v", wantLogsDir, errReadDataDir)
 	}
-	foundErrorLogInAuthDir := false
-	for _, entry := range authEntries {
+	foundErrorLogInDataDir := false
+	for _, entry := range dataEntries {
 		if strings.HasPrefix(entry.Name(), "error-") && strings.HasSuffix(entry.Name(), ".log") {
-			foundErrorLogInAuthDir = true
+			foundErrorLogInDataDir = true
 			break
 		}
 	}
-	if !foundErrorLogInAuthDir {
-		t.Fatalf("expected forced error log in auth fallback dir %s, got entries: %+v", authLogsDir, authEntries)
+	if !foundErrorLogInDataDir {
+		t.Fatalf("expected forced error log in resolved data-dir logs %s, got entries: %+v", wantLogsDir, dataEntries)
 	}
 
 	configLogsDir := filepath.Join(configDir, "logs")
