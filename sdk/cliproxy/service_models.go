@@ -756,13 +756,30 @@ func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []
 		if info == nil {
 			continue
 		}
+		// Custom endpoints name models the static catalogs do not carry, which is
+		// why their metadata comes from the catalog fallback. Everything it
+		// provides is a gap filler: configuration still wins.
+		if !model.Image {
+			resolved := modelconfig.ResolveModelInfoWithAlias(model.Name, model.Alias, modelType, nil)
+			mergeResolvedModelInfo(info, resolved)
+		}
 		thinkingSupport := model.Thinking
 		if thinkingSupport == nil && !model.Image {
-			thinkingSupport = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
+			// Keep the metadata-from-catalog result when it exists, and only
+			// fall back to the generic level set when nothing was resolved.
+			if info.Thinking == nil {
+				thinkingSupport = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
+			}
 		}
-		info.Thinking = modelconfig.NormalizeThinkingSupport(thinkingSupport)
-		info.SupportedInputModalities = normalizeCompatConfigModalities(model.InputModalities)
-		info.SupportedOutputModalities = normalizeCompatConfigModalities(model.OutputModalities)
+		if thinkingSupport != nil {
+			info.Thinking = modelconfig.NormalizeThinkingSupport(thinkingSupport)
+		}
+		if len(info.SupportedInputModalities) == 0 {
+			info.SupportedInputModalities = normalizeCompatConfigModalities(model.InputModalities)
+		}
+		if len(info.SupportedOutputModalities) == 0 {
+			info.SupportedOutputModalities = normalizeCompatConfigModalities(model.OutputModalities)
+		}
 		models = append(models, info)
 	}
 	return models
@@ -811,12 +828,40 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*M
 			continue
 		}
 		seen[key] = struct{}{}
-		if resolved := modelconfig.ResolveModelInfo(name, modelType, model.GetThinking()); resolved.Thinking != nil {
-			info.Thinking = resolved.Thinking
+		if resolved := modelconfig.ResolveModelInfoWithAlias(name, model.GetAlias(), modelType, model.GetThinking()); resolved != nil {
+			mergeResolvedModelInfo(info, resolved)
 		}
 		out = append(out, info)
 	}
 	return out
+}
+
+// mergeResolvedModelInfo copies catalog-resolved capabilities into a configured
+// model, filling only what configuration and the static catalogs left empty.
+//
+// Context and output limits are what the OpenAI-compatible listing advertises,
+// so dropping them here is what left configured models (custom providers in
+// particular) without a usable window. MaxContextLength is deliberately not
+// copied: it is a configuration-only Codex override, not a catalog value.
+func mergeResolvedModelInfo(info, resolved *ModelInfo) {
+	if info == nil || resolved == nil {
+		return
+	}
+	if info.ContextLength <= 0 && resolved.ContextLength > 0 {
+		info.ContextLength = resolved.ContextLength
+	}
+	if info.MaxCompletionTokens <= 0 && resolved.MaxCompletionTokens > 0 {
+		info.MaxCompletionTokens = resolved.MaxCompletionTokens
+	}
+	if info.Thinking == nil && resolved.Thinking != nil && len(resolved.Thinking.Levels) > 0 {
+		info.Thinking = resolved.Thinking
+	}
+	if len(info.SupportedInputModalities) == 0 && len(resolved.SupportedInputModalities) > 0 {
+		info.SupportedInputModalities = resolved.SupportedInputModalities
+	}
+	if len(info.SupportedOutputModalities) == 0 && len(resolved.SupportedOutputModalities) > 0 {
+		info.SupportedOutputModalities = resolved.SupportedOutputModalities
+	}
 }
 
 func buildVertexCompatConfigModels(entry *config.VertexCompatKey) []*ModelInfo {

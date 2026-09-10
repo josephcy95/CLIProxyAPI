@@ -118,3 +118,52 @@ func TestGetModelContextStatusesReportsMissingWindows(t *testing.T) {
 		t.Fatalf("overridden status = %+v, want resolved/overridden 131072", statuses[1])
 	}
 }
+
+func TestModelContextStatusReportsFallbackSource(t *testing.T) {
+	// A model only the fallback catalog knows about is labelled "fallback" so an
+	// inferred window can be told apart from a curated or configured one.
+	SetModelContextOverrides(nil)
+	t.Cleanup(func() { SetModelContextOverrides(nil) })
+
+	entry, ok := LookupCatalogFallback("deepseek-v4.1-flash")
+	if !ok {
+		t.Skip("deepseek-v4.1-flash is missing from the embedded fallback catalog")
+	}
+
+	reg := &ModelRegistry{
+		models:               make(map[string]*ModelRegistration),
+		clientModels:         make(map[string][]string),
+		clientModelInfos:     make(map[string]map[string]*ModelInfo),
+		clientProviders:      make(map[string]string),
+		availableModelsCache: make(map[string]availableModelsCacheEntry),
+		mutex:                &sync.RWMutex{},
+	}
+	reg.models["deepseek-v4.1-flash"] = &ModelRegistration{
+		Info: &ModelInfo{
+			ID:            "deepseek-v4.1-flash",
+			ContextLength: entry.Context,
+			Thinking:      &ThinkingSupport{Levels: entry.Efforts},
+		},
+		Count:     1,
+		Providers: map[string]int{"openai-compatibility": 1},
+	}
+
+	statuses := reg.GetModelContextStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("status count = %d, want 1", len(statuses))
+	}
+	if statuses[0].Source != "fallback" {
+		t.Fatalf("source = %q, want %q", statuses[0].Source, "fallback")
+	}
+
+	SetModelContextOverrides(map[string]ModelContextOverride{
+		"deepseek-v4.1-flash": {ContextLength: 262144},
+	})
+	statuses = reg.GetModelContextStatuses()
+	if statuses[0].Source != "override" {
+		t.Fatalf("source = %q, want %q once overridden", statuses[0].Source, "override")
+	}
+	if statuses[0].ContextLength != 262144 {
+		t.Fatalf("context length = %d, want the override to win", statuses[0].ContextLength)
+	}
+}

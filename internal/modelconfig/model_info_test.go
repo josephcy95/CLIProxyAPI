@@ -59,3 +59,77 @@ func TestResolveModelInfoUnknownModelKeepsMissingCapability(t *testing.T) {
 		t.Fatal("unknown configured model must use its exact bound capability")
 	}
 }
+
+func TestResolveModelInfoUsesCatalogFallbackForCustomEndpointModel(t *testing.T) {
+	// A model reachable only through a custom endpoint has no static catalog
+	// entry, which previously left it without any context window.
+	if registry.LookupStaticModelInfo("deepseek-v4.1-flash") != nil {
+		t.Skip("deepseek-v4.1-flash gained a static entry; pick another custom-only model")
+	}
+
+	info := ResolveModelInfo("deepseek-v4.1-flash", "openai-compatibility", nil)
+	if info == nil {
+		t.Fatal("ResolveModelInfo() = nil")
+	}
+	if info.ContextLength <= 0 {
+		t.Errorf("context length = %d, want a catalog fallback value", info.ContextLength)
+	}
+	if info.MaxCompletionTokens <= 0 {
+		t.Errorf("max completion tokens = %d, want a catalog fallback value", info.MaxCompletionTokens)
+	}
+	if info.Thinking == nil || len(info.Thinking.Levels) == 0 {
+		t.Fatalf("thinking = %+v, want catalog fallback levels", info.Thinking)
+	}
+}
+
+func TestResolveModelInfoCatalogFallbackLeavesUnknownModelUnset(t *testing.T) {
+	info := ResolveModelInfo("totally-unknown-model-xyz", "openai-compatibility", nil)
+	if info == nil {
+		t.Fatal("ResolveModelInfo() = nil")
+	}
+	if info.ContextLength != 0 || info.MaxCompletionTokens != 0 {
+		t.Fatalf("capabilities = %d/%d, want nothing guessed", info.ContextLength, info.MaxCompletionTokens)
+	}
+	if info.Thinking != nil {
+		t.Fatalf("thinking = %+v, want nil", info.Thinking)
+	}
+}
+
+func TestResolveModelInfoWithAliasResolvesThroughAlias(t *testing.T) {
+	info := ResolveModelInfoWithAlias("my-favourite-model", "muse-spark-1.3", "openai-compatibility", nil)
+	if info == nil {
+		t.Fatal("ResolveModelInfoWithAlias() = nil")
+	}
+	if info.ID != "my-favourite-model" {
+		t.Fatalf("model ID = %q, want the upstream name", info.ID)
+	}
+	if info.ContextLength <= 0 {
+		t.Errorf("context length = %d, want the aliased model's catalog value", info.ContextLength)
+	}
+}
+
+func TestResolveModelInfoExplicitThinkingWinsOverCatalogFallback(t *testing.T) {
+	support := &registry.ThinkingSupport{Levels: []string{"low"}}
+	info := ResolveModelInfo("deepseek-v4.1-flash", "openai-compatibility", support)
+	if info == nil || info.Thinking == nil {
+		t.Fatalf("ResolveModelInfo() = %+v, want explicit thinking support", info)
+	}
+	if len(info.Thinking.Levels) != 1 || info.Thinking.Levels[0] != "low" {
+		t.Fatalf("levels = %v, want only the configured level", info.Thinking.Levels)
+	}
+}
+
+func TestResolveModelInfoFillsLevelsForBudgetOnlyStaticModel(t *testing.T) {
+	// Claude's thinking variants are described by a budget range with no levels,
+	// so the level list stayed empty and clients could not select an effort.
+	info := ResolveModelInfo("claude-opus-4-6-thinking", "openai", nil)
+	if info == nil {
+		t.Fatal("ResolveModelInfo() = nil")
+	}
+	if info.ContextLength != 200000 {
+		t.Errorf("context length = %d, want the static catalog value to win", info.ContextLength)
+	}
+	if info.Thinking == nil || len(info.Thinking.Levels) == 0 {
+		t.Fatalf("thinking = %+v, want catalog levels filling the empty list", info.Thinking)
+	}
+}

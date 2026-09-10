@@ -11,12 +11,30 @@ import (
 // Static capabilities come from the suffix-free upstream name, while explicit
 // configuration takes precedence.
 func ResolveModelInfo(name, modelType string, support *registry.ThinkingSupport) *registry.ModelInfo {
+	return ResolveModelInfoWithAlias(name, "", modelType, support)
+}
+
+// ResolveModelInfoWithAlias resolves a configured model the same way as
+// ResolveModelInfo and additionally consults the catalog fallback.
+//
+// The fallback covers models no static catalog knows about, such as models
+// reached through a custom OpenAI-compatible endpoint. It is looked up by the
+// upstream name first, because that is what the request actually carries, then
+// by the client-facing alias, then by both with trailing reasoning-level
+// segments removed. Every field it provides is only a gap filler: static
+// catalog values and explicit configuration always win, and a model that
+// resolves nowhere keeps whatever it already had so nothing is guessed.
+func ResolveModelInfoWithAlias(name, alias, modelType string, support *registry.ThinkingSupport) *registry.ModelInfo {
 	trimmedName := strings.TrimSpace(name)
 	baseName := strings.TrimSpace(thinking.ParseSuffix(trimmedName).ModelName)
+	baseAlias := strings.TrimSpace(thinking.ParseSuffix(strings.TrimSpace(alias)).ModelName)
+
 	info := registry.LookupStaticModelInfo(baseName)
 	if info == nil {
 		info = &registry.ModelInfo{}
 	}
+	applyCatalogFallback(info, baseName, baseAlias)
+
 	info.ID = trimmedName
 	info.Type = strings.TrimSpace(modelType)
 	if support != nil {
@@ -24,6 +42,65 @@ func ResolveModelInfo(name, modelType string, support *registry.ThinkingSupport)
 	}
 	info.UserDefined = false
 	return info
+}
+
+// applyCatalogFallback fills fields the static catalogs could not provide.
+func applyCatalogFallback(info *registry.ModelInfo, candidates ...string) {
+	if info == nil {
+		return
+	}
+	entry, ok := lookupCatalogFallbackEntry(candidates)
+	if !ok {
+		return
+	}
+	if info.ContextLength <= 0 && entry.Context > 0 {
+		info.ContextLength = entry.Context
+	}
+	if info.MaxCompletionTokens <= 0 && entry.Output > 0 {
+		info.MaxCompletionTokens = entry.Output
+	}
+	mergeCatalogFallbackLevels(info, entry.Efforts)
+}
+
+// mergeCatalogFallbackLevels adds reasoning levels when the model advertises
+// none. A static entry can describe thinking as a budget range only, which
+// leaves the level list empty and therefore unselectable for clients; the
+// catalog levels fill that gap. Explicit configuration is applied afterwards
+// and still wins.
+func mergeCatalogFallbackLevels(info *registry.ModelInfo, efforts []string) {
+	if info == nil || len(efforts) == 0 {
+		return
+	}
+	fromCatalog := NormalizeThinkingSupport(&registry.ThinkingSupport{Levels: efforts})
+	if fromCatalog == nil || len(fromCatalog.Levels) == 0 {
+		return
+	}
+	if info.Thinking == nil {
+		info.Thinking = fromCatalog
+		return
+	}
+	if len(info.Thinking.Levels) > 0 {
+		return
+	}
+	merged := *info.Thinking
+	merged.Levels = fromCatalog.Levels
+	merged.ZeroAllowed = merged.ZeroAllowed || fromCatalog.ZeroAllowed
+	merged.DynamicAllowed = merged.DynamicAllowed || fromCatalog.DynamicAllowed
+	info.Thinking = &merged
+}
+
+// lookupCatalogFallbackEntry returns the first fallback entry matching any
+// candidate name.
+func lookupCatalogFallbackEntry(candidates []string) (*registry.CatalogFallbackEntry, bool) {
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if entry, ok := registry.LookupCatalogFallback(candidate); ok {
+			return entry, true
+		}
+	}
+	return nil, false
 }
 
 // NormalizeThinkingSupport clones and normalizes configured reasoning levels.

@@ -131,6 +131,10 @@ type ModelContextStatus struct {
 	Overridden bool `json:"overridden"`
 	// Resolved reports whether a context window is known at all.
 	Resolved bool `json:"resolved"`
+	// Source names where the effective context window came from, so an operator
+	// can tell a configured value from an inferred one. One of "override",
+	// "catalog", "fallback", or empty when nothing is known.
+	Source string `json:"source,omitempty"`
 }
 
 // GetModelContextStatuses returns the context-window state of every registered
@@ -193,9 +197,28 @@ func (r *ModelRegistry) GetModelContextStatuses() []ModelContextStatus {
 			MaxCompletionTokens: maxCompletion,
 			Overridden:          overridden,
 			Resolved:            contextLength > 0,
+			Source:              modelContextStatusSource(info.ID, overridden, contextLength),
 		})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// modelContextStatusSource labels where an effective context window came from.
+// A model that matches the fallback catalog but still reports no window was
+// resolved only for reasoning levels, so it is not labelled as catalog-backed.
+func modelContextStatusSource(modelID string, overridden bool, contextLength int) string {
+	if overridden {
+		return "override"
+	}
+	if lookup := LookupStaticModelInfo(modelID); lookup != nil {
+		if lookup.ContextLength > 0 || lookup.InputTokenLimit > 0 {
+			return "catalog"
+		}
+	}
+	if _, ok := LookupCatalogFallback(modelID); ok && contextLength > 0 {
+		return "fallback"
+	}
+	return ""
 }
