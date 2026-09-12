@@ -467,6 +467,11 @@ func interceptStreamChunk(ctx context.Context, host PluginInterceptorHost, req p
 func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context, handlerType, requestedModel, requestID string, req coreexecutor.Request, opts coreexecutor.Options, skipPluginID string) (coreexecutor.Request, coreexecutor.Options, *interfaces.ErrorMessage) {
 	host := h.interceptorHost()
 	if !requestInterceptorsEnabled(host) {
+		masked := desensitizeMaskPayload(opts.Metadata, requestID, req.Model, requestedModel, handlerType, req.Payload)
+		if len(masked) > 0 && (len(masked) != len(req.Payload) || string(masked) != string(req.Payload)) {
+			req.Payload = masked
+			opts.OriginalRequest = cloneBytes(masked)
+		}
 		return req, opts, nil
 	}
 	resp := interceptRequestBeforeAuth(ctx, host, pluginapi.RequestInterceptRequest{
@@ -488,11 +493,16 @@ func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context,
 	if resp.Terminate {
 		return req, opts, requestTerminationError(resp)
 	}
+	masked := desensitizeMaskPayload(opts.Metadata, requestID, req.Model, requestedModel, handlerType, req.Payload)
+	if len(masked) > 0 && (len(masked) != len(req.Payload) || string(masked) != string(req.Payload)) {
+		req.Payload = masked
+		opts.OriginalRequest = cloneBytes(masked)
+	}
 	return req, opts, nil
 }
 
 func (h *BaseAPIHandler) requestAfterAuthInterceptor(capture *requestAfterAuthCapture, requestID, skipPluginID string) coreexecutor.RequestAfterAuthInterceptor {
-	if !requestInterceptorsEnabled(h.interceptorHost()) {
+	if !requestInterceptorsEnabled(h.interceptorHost()) && !desensitizationActive() {
 		return nil
 	}
 	return func(ctx context.Context, req coreexecutor.RequestAfterAuthInterceptRequest) coreexecutor.RequestAfterAuthInterceptResponse {
@@ -547,54 +557,69 @@ func (h *BaseAPIHandler) webSocketResponseObserver(requestID, skipPluginID strin
 
 func (h *BaseAPIHandler) applyRequestInterceptorsAfterAuth(ctx context.Context, req coreexecutor.RequestAfterAuthInterceptRequest, requestID, skipPluginID string) coreexecutor.RequestAfterAuthInterceptResponse {
 	host := h.interceptorHost()
-	if !requestInterceptorsEnabled(host) {
-		return coreexecutor.RequestAfterAuthInterceptResponse{}
+	body := cloneBytes(req.Body)
+	var out coreexecutor.RequestAfterAuthInterceptResponse
+	if requestInterceptorsEnabled(host) {
+		resp := interceptRequestAfterAuth(ctx, host, pluginapi.RequestInterceptRequest{
+			RequestID:      requestID,
+			TraceID:        logging.GetRequestID(ctx),
+			SourceFormat:   req.SourceFormat.String(),
+			ToFormat:       req.ToFormat.String(),
+			Model:          req.Model,
+			RequestedModel: req.RequestedModel,
+			Stream:         req.Stream,
+			Headers:        cloneHeader(req.Headers),
+			Body:           cloneBytes(req.Body),
+			Metadata:       req.Metadata,
+		}, skipPluginID)
+		out = coreexecutor.RequestAfterAuthInterceptResponse{
+			Headers:         resp.Headers,
+			Body:            resp.Body,
+			ClearHeaders:    resp.ClearHeaders,
+			Terminate:       resp.Terminate,
+			StatusCode:      normalizedTerminationStatus(resp.StatusCode),
+			ResponseHeaders: resp.ResponseHeaders,
+			ResponseBody:    resp.ResponseBody,
+		}
+		if len(resp.Body) > 0 {
+			body = cloneBytes(resp.Body)
+		}
 	}
-	resp := interceptRequestAfterAuth(ctx, host, pluginapi.RequestInterceptRequest{
-		RequestID:      requestID,
-		TraceID:        logging.GetRequestID(ctx),
-		SourceFormat:   req.SourceFormat.String(),
-		ToFormat:       req.ToFormat.String(),
-		Model:          req.Model,
-		RequestedModel: req.RequestedModel,
-		Stream:         req.Stream,
-		Headers:        cloneHeader(req.Headers),
-		Body:           cloneBytes(req.Body),
-		Metadata:       req.Metadata,
-	}, skipPluginID)
-	return coreexecutor.RequestAfterAuthInterceptResponse{
-		Headers:         resp.Headers,
-		Body:            resp.Body,
-		ClearHeaders:    resp.ClearHeaders,
-		Terminate:       resp.Terminate,
-		StatusCode:      normalizedTerminationStatus(resp.StatusCode),
-		ResponseHeaders: resp.ResponseHeaders,
-		ResponseBody:    resp.ResponseBody,
+	if out.Terminate {
+		return out
 	}
+	masked := desensitizeMaskPayload(req.Metadata, requestID, req.Model, req.RequestedModel, req.SourceFormat.String(), body)
+	if len(masked) > 0 && (len(masked) != len(body) || string(masked) != string(body)) {
+		out.Body = masked
+	} else if len(out.Body) == 0 && desensitizationActive() {
+		// Idempotent path: still return body when plugins did not rewrite it so conductor applies consistently.
+		// Leave empty when unchanged to avoid unnecessary payload copies.
+	}
+	return out
 }
 
 func (h *BaseAPIHandler) applyResponseInterceptors(ctx context.Context, requestID, handlerType, normalizedModel, requestedModel string, opts coreexecutor.Options, rawResponseHeaders, responseHeaders http.Header, originalRequest, requestBody, body []byte, statusCode int, skipPluginID string) ([]byte, http.Header) {
 	host := h.interceptorHost()
-	if host == nil {
-		return body, responseHeaders
+	if host != nil {
+		resp := interceptResponse(ctx, host, pluginapi.ResponseInterceptRequest{
+			RequestID:       requestID,
+			SourceFormat:    handlerType,
+			Model:           normalizedModel,
+			RequestedModel:  requestedModel,
+			Stream:          false,
+			RequestHeaders:  cloneHeader(opts.Headers),
+			ResponseHeaders: cloneHeader(rawResponseHeaders),
+			OriginalRequest: cloneBytes(originalRequest),
+			RequestBody:     cloneBytes(requestBody),
+			Body:            cloneBytes(body),
+			StatusCode:      statusCode,
+			Metadata:        opts.Metadata,
+		}, skipPluginID)
+		responseHeaders = downstreamHeadersAfterInterceptors(rawResponseHeaders, finalInterceptorHeaders(rawResponseHeaders, resp.Headers), PassthroughHeadersEnabled(h.Cfg))
+		if len(resp.Body) > 0 {
+			body = cloneBytes(resp.Body)
+		}
 	}
-	resp := interceptResponse(ctx, host, pluginapi.ResponseInterceptRequest{
-		RequestID:       requestID,
-		SourceFormat:    handlerType,
-		Model:           normalizedModel,
-		RequestedModel:  requestedModel,
-		Stream:          false,
-		RequestHeaders:  cloneHeader(opts.Headers),
-		ResponseHeaders: cloneHeader(rawResponseHeaders),
-		OriginalRequest: cloneBytes(originalRequest),
-		RequestBody:     cloneBytes(requestBody),
-		Body:            cloneBytes(body),
-		StatusCode:      statusCode,
-		Metadata:        opts.Metadata,
-	}, skipPluginID)
-	responseHeaders = downstreamHeadersAfterInterceptors(rawResponseHeaders, finalInterceptorHeaders(rawResponseHeaders, resp.Headers), PassthroughHeadersEnabled(h.Cfg))
-	if len(resp.Body) > 0 {
-		body = cloneBytes(resp.Body)
-	}
+	body = desensitizeRestorePayload(opts.Metadata, requestID, body)
 	return body, responseHeaders
 }

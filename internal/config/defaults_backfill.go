@@ -34,6 +34,7 @@ func applyBuiltinPreUnmarshalDefaults(cfg *Config) {
 	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.XAI = DefaultXAIConfig()
 	cfg.Qoder = DefaultQoderConfig()
+	cfg.Desensitization = DefaultDesensitizationConfig()
 	cfg.Codex = NormalizeCodexConfig(cfg.Codex)
 	cfg.WebsocketAuth = true
 	cfg.Pprof.Enable = false

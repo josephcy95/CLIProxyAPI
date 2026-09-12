@@ -134,6 +134,9 @@ type Config struct {
 	// Qoder configures shared Qoder CN and international credential failure handling.
 	Qoder QoderConfig `yaml:"qoder" json:"qoder"`
 
+	// Desensitization configures built-in PII/secret masking for request/response bodies.
+	Desensitization DesensitizationConfig `yaml:"desensitization" json:"desensitization"`
+
 	// CodexHeaderDefaults configures fallback headers for Codex OAuth model requests.
 	// These are used only when the client does not send its own headers.
 	CodexHeaderDefaults CodexHeaderDefaults `yaml:"codex-header-defaults" json:"codex-header-defaults"`

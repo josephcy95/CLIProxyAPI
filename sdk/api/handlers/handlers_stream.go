@@ -177,6 +177,18 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 				return
 			}
 			if !ok {
+				if flushed := desensitizeFlushStream(opts.Metadata, lifecycle.requestID()); len(flushed) > 0 {
+					select {
+					case dataChan <- flushed:
+					case <-done:
+						completionOutcome = pluginapi.RequestCompletionCanceled
+						completionStatus = 0
+						if ctx != nil {
+							completionErr = ctx.Err()
+						}
+						return
+					}
+				}
 				if responseSSEValidator != nil {
 					if errValidate := responseSSEValidator.Finish(); errValidate != nil {
 						completionOutcome = pluginapi.RequestCompletionFailed
@@ -249,6 +261,10 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 				}
 			} else {
 				chunkIndex++
+			}
+			payload = desensitizeRestoreStreamChunk(opts.Metadata, lifecycle.requestID(), payload)
+			if len(payload) == 0 {
+				continue
 			}
 			if responseSSEValidator != nil {
 				validatedPayload, errValidate := responseSSEValidator.AddChunk(payload)
@@ -480,6 +496,10 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		} else {
 			(*chunkIndex)++
 		}
+		payload = desensitizeRestoreStreamChunk(opts.Metadata, lifecycle.requestID(), payload)
+		if len(payload) == 0 {
+			return nil, false, nil
+		}
 		if responseSSEValidator != nil {
 			validatedPayload, errValidate := responseSSEValidator.AddChunk(payload)
 			if errValidate != nil {
@@ -690,6 +710,16 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 				return
 			}
 			if !ok {
+				if flushed := desensitizeFlushStream(opts.Metadata, lifecycle.requestID()); len(flushed) > 0 {
+					if okSendData := sendData(flushed); !okSendData {
+						completionOutcome = pluginapi.RequestCompletionCanceled
+						completionStatus = 0
+						if ctx != nil {
+							completionErr = ctx.Err()
+						}
+						return
+					}
+				}
 				if responseSSEValidator != nil {
 					if errValidate := responseSSEValidator.Finish(); errValidate != nil {
 						errMsg := &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: errValidate}

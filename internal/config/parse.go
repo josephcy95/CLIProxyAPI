@@ -75,6 +75,7 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	}
 	cfg.XAI = NormalizeXAIConfig(cfg.XAI)
 	cfg.Qoder = NormalizeQoderConfig(cfg.Qoder)
+	cfg.Desensitization = NormalizeDesensitizationConfig(cfg.Desensitization)
 	cfg.Codex = NormalizeCodexConfig(cfg.Codex)
 
 	cfg.NormalizePluginsConfig()

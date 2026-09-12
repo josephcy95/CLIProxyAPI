@@ -217,6 +217,54 @@ qoder:
   # This upstream capacity queue is transient and never disables the auth file. Set 0 to retry immediately.
   queued-403-cooldown-minutes: 5
 
+
+# Built-in request/response desensitization (PII + secrets). Off by default.
+# Masks text leaves in outbound JSON as {{TYPE_id}}; restores on inbound when enabled.
+desensitization:
+  enabled: false
+  # Restore placeholders in non-stream + SSE responses (default true).
+  restore: true
+  # Also restore API keys / PEM / tokens / JWTs / connection strings (default false).
+  restore_secrets: false
+  # On parse/engine error: false = pass through (default), true = fail the request.
+  fail_closed: false
+  # In-memory session mapping TTL in minutes (sliding). Default 20.
+  session_ttl_minutes: 20
+  # Built-in detectors (defaults are conservative).
+  categories:
+    api_key: true
+    token: true
+    private_key: true
+    connstr: true
+    email: true
+    phone: true
+    idcard: true
+    card: false          # Luhn cards — high FP risk
+    jwt: false
+    ip_private: false    # 192.168/10/172.16-31 — high FP risk
+    ip_internal: false
+    mac: false
+    plate: false
+    landline: false
+    access_key: false
+    secret_assignment: false
+  secret_prefixes:
+    - "sk-"
+    - "ghp_"
+    - "github_pat_"
+    - "xoxb-"
+    - "AKIA"
+  custom_terms: []
+  # - value: "AcmeCorp"
+  #   category: "TERM"
+  #   whole_word: true
+  custom_regex: []
+  # - pattern: "EMP-\\d{6}"
+  #   category: "CUSTOM"
+  skip_models: []
+  skip_formats: []
+
+
 # Base model used by the legacy hosted image_generation tool path when a Codex image request is not proxied directly through the Image API.
 # Must start with "gpt-" (case-insensitive). If unset or invalid, defaults to "gpt-5.4-mini".
 # gpt-image-2-base-model: "gpt-5.4-mini"

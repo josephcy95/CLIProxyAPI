@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/desensitization"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
@@ -218,6 +219,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 	s.localPassword = optionState.localPassword
 	// Durable usage store for request monitoring (fan-out from usage plugins).
+	desensitization.Configure(cfg.Desensitization)
+
 	if store, errUsage := usagestore.Configure(cfg.UsageStorePath, cfg.UsageRetentionDays, cfg.UsageStatisticsEnabled); errUsage != nil {
 		log.Errorf("failed to open usage store: %v", errUsage)
 	} else if store != nil {
