@@ -467,7 +467,10 @@ func interceptStreamChunk(ctx context.Context, host PluginInterceptorHost, req p
 func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context, handlerType, requestedModel, requestID string, req coreexecutor.Request, opts coreexecutor.Options, skipPluginID string) (coreexecutor.Request, coreexecutor.Options, *interfaces.ErrorMessage) {
 	host := h.interceptorHost()
 	if !requestInterceptorsEnabled(host) {
-		masked := desensitizeMaskPayload(ctx, opts.Metadata, requestID, req.Model, requestedModel, handlerType, "", "", req.Payload)
+		masked, errMask := desensitizeMaskPayload(ctx, opts.Metadata, requestID, req.Model, requestedModel, handlerType, "", "", req.Payload)
+		if errMask != nil {
+			return req, opts, desensitizationFailClosedError(errMask)
+		}
 		if len(masked) > 0 && (len(masked) != len(req.Payload) || string(masked) != string(req.Payload)) {
 			req.Payload = masked
 			opts.OriginalRequest = cloneBytes(masked)
@@ -493,7 +496,10 @@ func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context,
 	if resp.Terminate {
 		return req, opts, requestTerminationError(resp)
 	}
-	masked := desensitizeMaskPayload(ctx, opts.Metadata, requestID, req.Model, requestedModel, handlerType, "", "", req.Payload)
+	masked, errMask := desensitizeMaskPayload(ctx, opts.Metadata, requestID, req.Model, requestedModel, handlerType, "", "", req.Payload)
+	if errMask != nil {
+		return req, opts, desensitizationFailClosedError(errMask)
+	}
 	if len(masked) > 0 && (len(masked) != len(req.Payload) || string(masked) != string(req.Payload)) {
 		req.Payload = masked
 		opts.OriginalRequest = cloneBytes(masked)
@@ -588,7 +594,13 @@ func (h *BaseAPIHandler) applyRequestInterceptorsAfterAuth(ctx context.Context, 
 	if out.Terminate {
 		return out
 	}
-	masked := desensitizeMaskPayload(ctx, req.Metadata, requestID, req.Model, req.RequestedModel, req.SourceFormat.String(), req.Provider, req.AuthKind, body)
+	masked, errMask := desensitizeMaskPayload(ctx, req.Metadata, requestID, req.Model, req.RequestedModel, req.SourceFormat.String(), req.Provider, req.AuthKind, body)
+	if errMask != nil {
+		out.Terminate = true
+		out.StatusCode = http.StatusBadGateway
+		out.ResponseBody = append([]byte(nil), desensitizationFailClosedBody...)
+		return out
+	}
 	if len(masked) > 0 && (len(masked) != len(body) || string(masked) != string(body)) {
 		out.Body = masked
 	} else if len(out.Body) == 0 && desensitizationActive() {

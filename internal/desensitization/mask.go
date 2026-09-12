@@ -67,6 +67,9 @@ func (e *Engine) findSpans(text string) []matchSpan {
 		if start < 0 || end > len(text) || start >= end {
 			return
 		}
+		if e.isAllowlisted(orig) {
+			return
+		}
 		if !e.cfg.CategoryEnabled(cat) && cat != "TERM" && cat != "CUSTOM" {
 			return
 		}
@@ -285,16 +288,25 @@ func isWholeWord(text string, start, end int) bool {
 	return true
 }
 
+// isASCIIWordBoundary requires a token edge so values like task-… or flask-sk-… are not API keys.
+// Letters/digits/_/- on either side disqualify the match (prevents substring hits on "sk").
 func isASCIIWordBoundary(text string, start, end int) bool {
 	if start > 0 {
 		c := text[start-1]
 		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
 			return false
 		}
+		// Multibyte / non-ASCII letter-like left neighbor also blocks (e.g. CJK glued to prefix).
+		if c >= 0x80 {
+			return false
+		}
 	}
 	if end < len(text) {
 		c := text[end]
 		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+			return false
+		}
+		if c >= 0x80 {
 			return false
 		}
 	}

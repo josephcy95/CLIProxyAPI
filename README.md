@@ -4,19 +4,22 @@ A practical multi-provider proxy for running shared AI accounts, API keys, and O
 
 This is a fork of the original [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), with a focus on account-pool management, Codex routing, monitoring, and day-to-day operations.
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 ## What this fork adds
 
-- **Adaptive Codex routing** that considers account availability, weekly quota, renewal time, reset credits, priority, weight, and per-account concurrency.
-- **Safer busy-account handling** so high-concurrency workloads spread across accounts instead of repeatedly hammering one account with 429s.
-- **Codex private instructions** with model markers, provider filtering, API-key support, and a dedicated management workflow.
-- **Free-first routing for shared models**, with an opt-in preference when free accounts are available.
-- **Better Codex recovery** for cooldowns, exhausted accounts, expired or deactivated auth, reset credits, and overloaded streaming responses.
-- **Durable usage monitoring** with request history, account status, API-key spending, token details, prices, and model-routing information.
-- **Qoder support** for both international and Qoder CN login flows, models, quota, regions, and failure policies.
-- **Per-key routing controls** including priority and weighted round-robin behavior for OpenAI-compatible accounts.
-- **Custom model controls** including context-window and reasoning metadata overrides.
-- **Fork-friendly Docker packaging** with a single `/data` volume and release images published to GHCR.
-- **And many more** small fixes, compatibility improvements, provider integrations, and operational conveniences.
+- 🧭 **Adaptive Codex routing** that considers account availability, weekly quota, renewal time, reset credits, priority, weight, and per-account concurrency.
+- 🛡️ **Safer busy-account handling** so high-concurrency workloads spread across accounts instead of repeatedly hammering one account with 429s.
+- 📝 **Codex private instructions** with model markers, provider filtering, API-key support, and a dedicated management workflow.
+- 🆓 **Free-first routing for shared models**, with an opt-in preference when free accounts are available.
+- ♻️ **Better Codex recovery** for cooldowns, exhausted accounts, expired or deactivated auth, reset credits, and overloaded streaming responses.
+- 📊 **Durable usage monitoring** with request history, account status, API-key spending, token details, prices, and model-routing information.
+- 🌏 **Qoder support** for both international and Qoder CN login flows, models, quota, regions, and failure policies.
+- 🔑 **Per-key routing controls** including priority and weighted round-robin behavior for OpenAI-compatible accounts.
+- 🧩 **Custom model controls** including context-window and reasoning metadata overrides.
+- 🔏 **Privacy / 脱敏** — reversible mask+restore for PII and secrets (`{{TYPE_id}}`), category knobs, scoped apply-to (client key / OAuth / API providers), skip model/format, exact allowlist, and conservative defaults (off until enabled; low-latency in-memory maps only).
+- 🐳 **Fork-friendly Docker packaging** with a single `/data` volume and release images published to GHCR.
+- ✨ **And many more** small fixes, compatibility improvements, provider integrations, and operational conveniences.
 
 ## Screenshots
 

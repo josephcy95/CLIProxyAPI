@@ -2,6 +2,7 @@ package desensitization
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -211,5 +212,144 @@ func TestShouldMaskScopes(t *testing.T) {
 	mix.APIProviders = []string{"xai"}
 	if !NewEngine(mix).ShouldMask("priv", "", "") || !NewEngine(mix).ShouldMask("nope", "xai", "apikey") {
 		t.Fatal("mixture should be OR")
+	}
+}
+
+func TestFailClosedRejectsMaskFailureOnJSON(t *testing.T) {
+	cfg := enabledCfg()
+	cfg.FailClosed = true
+	eng := NewEngine(cfg)
+	eng.SetTestMaskFailure(fmt.Errorf("store boom"))
+	raw := []byte(`{"text":"hello 13800138000"}`)
+	out, err := eng.MaskJSONBody("s", "m", "m", "openai", raw)
+	if err == nil {
+		t.Fatal("expected fail_closed error")
+	}
+	if out != nil {
+		t.Fatalf("expected nil body on fail_closed, got %s", out)
+	}
+}
+
+func TestFailClosedPassesNonJSON(t *testing.T) {
+	cfg := enabledCfg()
+	cfg.FailClosed = true
+	eng := NewEngine(cfg)
+	eng.SetTestMaskFailure(fmt.Errorf("should not matter"))
+	raw := []byte("not-json-at-all 13800138000")
+	out, err := eng.MaskJSONBody("s", "m", "m", "openai", raw)
+	if err != nil {
+		t.Fatalf("non-JSON must not fail closed: %v", err)
+	}
+	if string(out) != string(raw) {
+		t.Fatalf("expected passthrough, got %s", out)
+	}
+}
+
+func TestFailClosedOpenPassesOnMaskFailure(t *testing.T) {
+	cfg := enabledCfg()
+	cfg.FailClosed = false
+	eng := NewEngine(cfg)
+	eng.SetTestMaskFailure(fmt.Errorf("store boom"))
+	raw := []byte(`{"text":"hello"}`)
+	out, err := eng.MaskJSONBody("s", "m", "m", "openai", raw)
+	if err != nil {
+		t.Fatalf("fail_closed off should not error: %v", err)
+	}
+	if string(out) != string(raw) {
+		t.Fatalf("expected original body, got %s", out)
+	}
+}
+
+func TestAllowlistExactHitVsNearMiss(t *testing.T) {
+	cfg := enabledCfg()
+	cfg.Allowlist = []string{"user@example.com", "sk-abcdefghijklmnopqrstuvwxyz012345"}
+	eng := NewEngine(cfg)
+	sid := "allow-1"
+	kept := eng.maskText(sid, "mail user@example.com please", nil)
+	if !strings.Contains(kept, "user@example.com") {
+		t.Fatalf("exact allowlist email should be kept: %q", kept)
+	}
+	// Near-miss: matched value differs by even one character → must mask.
+	miss := eng.maskText(sid, "mail user@example.org please", nil)
+	if strings.Contains(miss, "user@example.org") {
+		t.Fatalf("near-miss email should be masked: %q", miss)
+	}
+	keyKept := eng.maskText(sid, "key sk-abcdefghijklmnopqrstuvwxyz012345", nil)
+	if !strings.Contains(keyKept, "sk-abcdefghijklmnopqrstuvwxyz012345") {
+		t.Fatalf("exact allowlisted API key should be kept: %q", keyKept)
+	}
+	keyNear := eng.maskText(sid, "key sk-abcdefghijklmnopqrstuvwxyz012345X", nil)
+	if strings.Contains(keyNear, "sk-abcdefghijklmnopqrstuvwxyz012345X") {
+		t.Fatalf("near-miss API key should be masked: %q", keyNear)
+	}
+}
+
+func TestSecretPrefixExtensionsAndBoundaries(t *testing.T) {
+	eng := NewEngine(enabledCfg())
+	sid := "pref"
+	cases := []struct {
+		in      string
+		wantTok bool
+		label   string
+	}{
+		{"sk-ant-abcdefghijklmnopqrstuvwxyz0123", true, "sk-ant-"},
+		{"glpat-abcdefghijklmnopqrstuvwxyz0123", true, "glpat-"},
+		{"npm_abcdefghijklmnopqrstuvwxyz012345", true, "npm_"},
+		{"xoxb-abcdefghijklmnopqrstuvwxyz0123", true, "xoxb-"},
+		{"xoxp-abcdefghijklmnopqrstuvwxyz0123", true, "xoxp-"},
+		{"pk-live-abcdefghijklmnopqrstuvwxyz", true, "pk-live-"},
+		{"pk-test-abcdefghijklmnopqrstuvwxyz", true, "pk-test-"},
+		{"rk-abcdefghijklmnopqrstuvwxyz012345", true, "rk-"},
+		{"task-abcdefghijklmnopqrstuvwxyz0123", false, "task- false positive"},
+		{"mysk-abcdefghijklmnopqrstuvwxyz0123", false, "mysk false positive"},
+		{"flask-sk-abcdefghijklmnopqrstuvwxyz0123", false, "embedded sk after -"},
+	}
+	for _, tc := range cases {
+		out := eng.maskText(sid, tc.in, nil)
+		has := strings.Contains(out, "{{API_KEY_")
+		if has != tc.wantTok {
+			t.Fatalf("%s: wantTok=%v got %q", tc.label, tc.wantTok, out)
+		}
+	}
+}
+
+func TestCNSecretAssignmentKeywords(t *testing.T) {
+	cfg := enabledCfg()
+	on := true
+	cfg.Categories.SecretAssignment = &on
+	eng := NewEngine(cfg)
+	sid := "cn"
+	for _, in := range []string{"口令: hunter2xx", "登录密码： hunter2xx"} {
+		out := eng.maskText(sid, in, nil)
+		if strings.Contains(out, "hunter2xx") || !strings.Contains(out, "{{SECRET_ASSIGNMENT_") {
+			t.Fatalf("expected CN secret assignment masked, got %q from %q", out, in)
+		}
+	}
+}
+
+func TestJWTValidationStillRequired(t *testing.T) {
+	cfg := enabledCfg()
+	on := true
+	cfg.Categories.JWT = &on
+	eng := NewEngine(cfg)
+	sid := "jwt"
+	// Header decodes to JSON without "alg" → must not mask.
+	fake := "eyJzdWIiOiIxMjM0NTY3ODkwIn0.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepartxxxxx"
+	if validateJWT(fake) {
+		t.Fatal("test setup: fake without alg must not validate")
+	}
+	out := eng.maskText(sid, "token "+fake, nil)
+	if strings.Contains(out, "{{JWT_") {
+		t.Fatalf("invalid JWT must not be masked: %q", out)
+	}
+	// Real-shaped header with alg
+	header := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" // {"alg":"HS256","typ":"JWT"}
+	validish := header + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepartxxxxx"
+	if !validateJWT(validish) {
+		t.Fatal("expected validateJWT to accept alg header")
+	}
+	out = eng.maskText(sid, "token "+validish, nil)
+	if !strings.Contains(out, "{{JWT_") {
+		t.Fatalf("valid JWT shape should mask: %q", out)
 	}
 }

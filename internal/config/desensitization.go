@@ -19,7 +19,8 @@ type DesensitizationConfig struct {
 	// RestoreSecrets also restores API keys / PEM / tokens / JWTs / connstr passwords.
 	// Default false — keep those as {{API_KEY_…}} etc. in replies.
 	RestoreSecrets *bool `yaml:"restore_secrets,omitempty" json:"restore_secrets,omitempty"`
-	// FailClosed rejects the request on engine/parse errors. Default false (pass through).
+	// FailClosed rejects the request on mask/store failure for scannable JSON. Default false (pass through).
+	// Non-JSON / empty / skipped formats are never rejected.
 	FailClosed bool `yaml:"fail_closed" json:"fail_closed"`
 	// SessionTTLMinutes is the in-memory mapping TTL (sliding). Default 20.
 	SessionTTLMinutes *int `yaml:"session_ttl_minutes,omitempty" json:"session_ttl_minutes,omitempty"`
@@ -31,6 +32,8 @@ type DesensitizationConfig struct {
 	CustomRegex []DesensitizationRegex `yaml:"custom_regex" json:"custom_regex"`
 	// SecretPrefixes are high-signal credential prefixes (sk-, ghp_, …).
 	SecretPrefixes []string `yaml:"secret_prefixes" json:"secret_prefixes"`
+	// Allowlist holds exact values that must never be masked (exact string match only).
+	Allowlist []string `yaml:"allowlist" json:"allowlist"`
 	// SkipModels skips masking when model or requested model matches (case-insensitive).
 	SkipModels []string `yaml:"skip_models" json:"skip_models"`
 	// SkipFormats skips masking when source format matches (case-insensitive).
@@ -105,11 +108,16 @@ func DefaultDesensitizationConfig() DesensitizationConfig {
 			AccessKey:        &off,
 			SecretAssignment: &off,
 		},
-		SecretPrefixes: []string{"sk-", "ghp_", "github_pat_", "xoxb-", "AKIA"},
-		CustomTerms:    nil,
-		CustomRegex:    nil,
-		SkipModels:     nil,
-		SkipFormats:    nil,
+		SecretPrefixes: []string{
+			"sk-", "sk-ant-", "ghp_", "github_pat_", "glpat-", "npm_",
+			"xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-",
+			"pk-live-", "pk-test-", "rk-", "AKIA",
+		},
+		Allowlist:   nil,
+		CustomTerms: nil,
+		CustomRegex: nil,
+		SkipModels:  nil,
+		SkipFormats: nil,
 	}
 }
 
@@ -190,6 +198,7 @@ func NormalizeDesensitizationConfig(value DesensitizationConfig) Desensitization
 		regexes = append(regexes, r)
 	}
 	value.CustomRegex = regexes
+	value.Allowlist = trimStringSlice(value.Allowlist)
 	value.SkipModels = trimStringSlice(value.SkipModels)
 	value.SkipFormats = trimStringSlice(value.SkipFormats)
 	return value

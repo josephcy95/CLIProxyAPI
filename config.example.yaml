@@ -231,7 +231,8 @@ desensitization:
   restore: true
   # Also restore API keys / PEM / tokens / JWTs / connection strings (default false).
   restore_secrets: false
-  # On parse/engine error: false = pass through (default), true = fail the request.
+  # On mask/store failure for scannable JSON: false = pass through (default), true = reject with HTTP 502.
+  # Empty / non-JSON bodies are never rejected.
   fail_closed: false
   # In-memory session mapping TTL in minutes (sliding). Default 20.
   session_ttl_minutes: 20
@@ -255,10 +256,22 @@ desensitization:
     secret_assignment: false
   secret_prefixes:
     - "sk-"
+    - "sk-ant-"
     - "ghp_"
     - "github_pat_"
+    - "glpat-"
+    - "npm_"
     - "xoxb-"
+    - "xoxa-"
+    - "xoxp-"
+    - "xoxr-"
+    - "xoxs-"
+    - "pk-live-"
+    - "pk-test-"
+    - "rk-"
     - "AKIA"
+  # Exact string match only (never substring). Values listed here are never masked.
+  allowlist: []
   custom_terms: []
   # - value: "AcmeCorp"
   #   category: "TERM"

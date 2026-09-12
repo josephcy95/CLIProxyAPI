@@ -2,30 +2,48 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/desensitization"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	log "github.com/sirupsen/logrus"
 )
 
-func desensitizeMaskPayload(ctx context.Context, metadata map[string]any, requestID, model, requestedModel, format, provider, authKind string, body []byte) []byte {
+var desensitizationFailClosedBody = []byte(`{"error":{"message":"desensitization failed","type":"proxy_error"}}`)
+
+func desensitizeMaskPayload(ctx context.Context, metadata map[string]any, requestID, model, requestedModel, format, provider, authKind string, body []byte) ([]byte, error) {
 	eng := desensitization.Current()
 	if eng == nil || !eng.Config().Enabled || len(body) == 0 {
-		return body
+		return body, nil
 	}
 	clientKey := helps.APIKeyFromContext(ctx)
 	if !eng.ShouldMask(clientKey, provider, authKind) {
-		return body
+		return body, nil
 	}
 	sid := desensitization.SessionIDFromMetadata(metadata, requestID)
 	out, err := eng.MaskJSONBody(sid, model, requestedModel, format, body)
 	if err != nil {
 		if eng.Config().FailClosed {
 			log.Warnf("desensitization mask failed (fail_closed): %v", err)
+			return nil, err
 		}
-		return body
+		return body, nil
 	}
-	return out
+	return out, nil
+}
+
+func desensitizationFailClosedError(err error) *interfaces.ErrorMessage {
+	if err == nil {
+		err = fmt.Errorf("desensitization failed")
+	}
+	return &interfaces.ErrorMessage{
+		StatusCode:     http.StatusBadGateway,
+		Error:          err,
+		DirectResponse: true,
+		Body:           append([]byte(nil), desensitizationFailClosedBody...),
+	}
 }
 
 func desensitizeRestorePayload(metadata map[string]any, requestID string, body []byte) []byte {

@@ -1,6 +1,6 @@
 # CLI Proxy API (fork)
 
-[中文](README.md)
+[中文](README.zh-CN.md)
 
 OpenAI/Gemini/Claude/Codex compatible proxy. This fork publishes to:
 

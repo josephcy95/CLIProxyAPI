@@ -134,3 +134,34 @@ func TestAppliesInteractionsAlias(t *testing.T) {
 		t.Fatal("interactions should alias gemini-interactions")
 	}
 }
+
+func TestNormalizeAllowlist(t *testing.T) {
+	got := NormalizeDesensitizationConfig(DesensitizationConfig{
+		Allowlist: []string{"  keep-me  ", "", "also"},
+	})
+	if len(got.Allowlist) != 2 || got.Allowlist[0] != "keep-me" || got.Allowlist[1] != "also" {
+		t.Fatalf("allowlist = %#v", got.Allowlist)
+	}
+	if got.Allowlist == nil && len(got.Allowlist) != 0 {
+		t.Fatal("empty should normalize cleanly")
+	}
+}
+
+func TestDefaultSecretPrefixesIncludeExtensions(t *testing.T) {
+	got := DefaultDesensitizationConfig()
+	want := []string{"sk-ant-", "glpat-", "npm_", "xoxp-", "pk-live-", "pk-test-", "rk-"}
+	have := map[string]struct{}{}
+	for _, p := range got.SecretPrefixes {
+		have[p] = struct{}{}
+	}
+	for _, w := range want {
+		if _, ok := have[w]; !ok {
+			t.Fatalf("missing default prefix %q in %#v", w, got.SecretPrefixes)
+		}
+	}
+	for _, keep := range []string{"sk-", "ghp_", "github_pat_", "xoxb-", "AKIA"} {
+		if _, ok := have[keep]; !ok {
+			t.Fatalf("must keep existing prefix %q", keep)
+		}
+	}
+}

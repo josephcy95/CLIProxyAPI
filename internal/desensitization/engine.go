@@ -22,13 +22,15 @@ type Hit struct {
 
 // Engine is the process-wide desensitization engine (in-memory session maps only).
 type Engine struct {
-	mu        sync.RWMutex
-	cfg       config.DesensitizationConfig
-	sessions  map[string]*sessionState
-	streams   map[string]*streamBuffer // key: sessionID + "\x00" + streamID
-	customs   []*regexp.Regexp
-	customCat []string
-	prefixRes []*regexp.Regexp
+	mu          sync.RWMutex
+	cfg         config.DesensitizationConfig
+	sessions    map[string]*sessionState
+	streams     map[string]*streamBuffer // key: sessionID + "\x00" + streamID
+	customs     []*regexp.Regexp
+	customCat   []string
+	prefixRes   []*regexp.Regexp
+	allowExact  map[string]struct{} // exact allowlist values (O(1))
+	testMaskErr error               // test-only: simulate mask/store failure
 }
 
 type sessionState struct {
@@ -96,9 +98,16 @@ func NewEngine(cfg config.DesensitizationConfig) *Engine {
 
 func newEngine(cfg config.DesensitizationConfig) *Engine {
 	e := &Engine{
-		cfg:      cfg,
-		sessions: make(map[string]*sessionState),
-		streams:  make(map[string]*streamBuffer),
+		cfg:        cfg,
+		sessions:   make(map[string]*sessionState),
+		streams:    make(map[string]*streamBuffer),
+		allowExact: make(map[string]struct{}, len(cfg.Allowlist)),
+	}
+	for _, v := range cfg.Allowlist {
+		if v == "" {
+			continue
+		}
+		e.allowExact[v] = struct{}{}
 	}
 	for _, r := range cfg.CustomRegex {
 		re, err := regexp.Compile(r.Pattern)
@@ -168,6 +177,22 @@ func (e *Engine) Config() config.DesensitizationConfig {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.cfg
+}
+
+func (e *Engine) isAllowlisted(value string) bool {
+	if e == nil || len(e.allowExact) == 0 || value == "" {
+		return false
+	}
+	_, ok := e.allowExact[value]
+	return ok
+}
+
+// SetTestMaskFailure injects a mask/store error for tests only.
+func (e *Engine) SetTestMaskFailure(err error) {
+	if e == nil {
+		return
+	}
+	e.testMaskErr = err
 }
 
 func (e *Engine) shouldSkip(model, requestedModel, format string) bool {
@@ -293,8 +318,12 @@ func (e *Engine) MaskJSONBody(sessionID, model, requestedModel, format string, b
 	}
 	var payload any
 	if err := json.Unmarshal(body, &payload); err != nil {
+		// Empty/non-JSON/unrelated formats are never fail-closed — pass through.
+		return body, nil
+	}
+	if e.testMaskErr != nil {
 		if e.cfg.FailClosed {
-			return nil, fmt.Errorf("desensitization: invalid json: %w", err)
+			return nil, e.testMaskErr
 		}
 		return body, nil
 	}
@@ -313,7 +342,7 @@ func (e *Engine) MaskJSONBody(sessionID, model, requestedModel, format string, b
 	out, err := json.Marshal(payload)
 	if err != nil {
 		if e.cfg.FailClosed {
-			return nil, err
+			return nil, fmt.Errorf("desensitization: remashal failed: %w", err)
 		}
 		return body, nil
 	}
