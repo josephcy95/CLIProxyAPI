@@ -483,6 +483,11 @@ func isCodexHandshakeMetadataEvent(eventType string) bool {
 // is shared with the unbuffered path, where the rejection is delivered in-stream and a status
 // change would alter cooldown classification and retry-after parsing for everyone. Keeping 503
 // scoped to this path means disabling the feature restores the previous behaviour exactly.
+// observeCodexTokenEvent inspects a stream payload and marks TTFT on the first substantive token event.
+func observeCodexTokenEvent(reporter *helps.UsageReporter, payload []byte) {
+	helps.ObserveResponsesTokenEvent(reporter, payload)
+}
+
 func newCodexBootstrapOverloadErr(body []byte) statusErr {
 	return newCodexStatusErr(http.StatusServiceUnavailable, body)
 }

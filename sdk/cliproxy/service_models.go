@@ -639,6 +639,11 @@ func applyModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix boo
 		}
 		clone := *model
 		clone.ID = trimmedPrefix + "/" + baseID
+		if clone.MetadataModelID == "" {
+			clone.MetadataModelID = baseID
+		}
+		clone.ExplicitThinking = model.ExplicitThinking
+		clone.ExplicitInputModalities = model.ExplicitInputModalities
 		addModel(&clone)
 	}
 	return out
@@ -719,14 +724,19 @@ func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, creat
 	if displayName == "" {
 		displayName = alias
 	}
+	metadataModelID := name
+	if metadataModelID == "" {
+		metadataModelID = alias
+	}
 	info := &ModelInfo{
-		ID:          alias,
-		Object:      "model",
-		Created:     created,
-		OwnedBy:     ownedBy,
-		Type:        modelType,
-		DisplayName: displayName,
-		UserDefined: userDefined,
+		ID:              alias,
+		MetadataModelID: metadataModelID,
+		Object:          "model",
+		Created:         created,
+		OwnedBy:         ownedBy,
+		Type:            modelType,
+		DisplayName:     displayName,
+		UserDefined:     userDefined,
 	}
 	if maxContextModel, okMaxContext := any(model).(modelMaxContextLengthEntry); okMaxContext {
 		if maxContextLength := maxContextModel.GetMaxContextLength(); maxContextLength > 0 {
@@ -783,6 +793,12 @@ func buildOpenAICompatibilityConfigModels(compat *config.OpenAICompatibility) []
 		if len(info.SupportedOutputModalities) == 0 {
 			info.SupportedOutputModalities = normalizeCompatConfigModalities(model.OutputModalities)
 		}
+		if model.Thinking != nil {
+			info.ExplicitThinking = true
+		}
+		if len(model.InputModalities) > 0 {
+			info.ExplicitInputModalities = true
+		}
 		models = append(models, info)
 	}
 	return models
@@ -831,6 +847,9 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*M
 			continue
 		}
 		seen[key] = struct{}{}
+		if model.GetThinking() != nil {
+			info.ExplicitThinking = true
+		}
 		if resolved := modelconfig.ResolveModelInfoWithAlias(name, model.GetAlias(), modelType, model.GetThinking()); resolved != nil {
 			mergeResolvedModelInfo(info, resolved)
 		}
@@ -1094,6 +1113,13 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 			seen[aliasKey] = struct{}{}
 			clone := *model
 			clone.ID = mappedID
+			if model.MetadataModelID != "" {
+				clone.MetadataModelID = model.MetadataModelID
+			} else {
+				clone.MetadataModelID = id
+			}
+			clone.ExplicitThinking = model.ExplicitThinking
+			clone.ExplicitInputModalities = model.ExplicitInputModalities
 			if entry.displayName != "" {
 				clone.DisplayName = entry.displayName
 			}

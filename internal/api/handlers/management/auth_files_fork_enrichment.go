@@ -302,9 +302,20 @@ func syncAuthFileCodexPlanTypeAttribute(auth *coreauth.Auth) {
 	if auth.Attributes == nil {
 		auth.Attributes = make(map[string]string)
 	}
+	// Prefer stored plan fields (quota refresh) over JWT; do not read Attributes
+	// as a source or a clear of metadata.plan_type cannot drop the attribute.
 	planType := authMetadataString(auth, "plan_type")
 	if planType == "" {
 		planType = authMetadataString(auth, "chatgpt_plan_type")
+	}
+	if planType == "" {
+		if claims := extractCodexIDTokenClaims(auth); claims != nil {
+			if pt, _ := claims["plan_type"].(string); strings.TrimSpace(pt) != "" {
+				planType = strings.TrimSpace(pt)
+			} else if pt, _ := claims["chatgpt_plan_type"].(string); strings.TrimSpace(pt) != "" {
+				planType = strings.TrimSpace(pt)
+			}
+		}
 	}
 	if planType == "" {
 		delete(auth.Attributes, "plan_type")

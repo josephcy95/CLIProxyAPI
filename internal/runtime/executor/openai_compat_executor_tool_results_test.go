@@ -19,12 +19,13 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 		name            string
 		stream          bool
 		inputModalities []string
-		wantString      bool
+		wantOmitted     bool
+		wantRelayImage  bool
 	}{
-		{name: "non-stream text-only", stream: false, inputModalities: []string{"text"}, wantString: true},
-		{name: "stream text-only", stream: true, inputModalities: []string{"text"}, wantString: true},
-		{name: "non-stream multimodal", stream: false, inputModalities: []string{"text", "image"}, wantString: false},
-		{name: "non-stream unspecified", stream: false, inputModalities: nil, wantString: false},
+		{name: "non-stream text-only", stream: false, inputModalities: []string{"text"}, wantOmitted: true},
+		{name: "stream text-only", stream: true, inputModalities: []string{"text"}, wantOmitted: true},
+		{name: "non-stream multimodal", stream: false, inputModalities: []string{"text", "image"}, wantRelayImage: true},
+		{name: "non-stream unspecified", stream: false, inputModalities: nil, wantRelayImage: true},
 	}
 
 	for _, tt := range tests {
@@ -84,16 +85,30 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 			}
 
 			toolContent := gjson.GetBytes(gotBody, "messages.1.content")
-			if tt.wantString {
-				if toolContent.Type != gjson.String {
-					t.Fatalf("tool content type = %s, want string; body=%s", toolContent.Type, string(gotBody))
-				}
+			if toolContent.Type != gjson.String {
+				t.Fatalf("tool content type = %s, want string; body=%s", toolContent.Type, string(gotBody))
+			}
+			if tt.wantOmitted {
 				want := "image inspected\n\n[image omitted: unsupported by upstream]"
 				if toolContent.String() != want {
-					t.Fatalf("tool content = %q, want %q", toolContent.String(), want)
+					t.Fatalf("tool content = %q, want %q; body=%s", toolContent.String(), want, string(gotBody))
 				}
-			} else if !toolContent.IsArray() {
-				t.Fatalf("tool content type = %s, want array; body=%s", toolContent.Type, string(gotBody))
+				if gjson.GetBytes(gotBody, "messages.#").Int() != 2 {
+					t.Fatalf("expected relay user message dropped for text-only model; body=%s", string(gotBody))
+				}
+				return
+			}
+			if tt.wantRelayImage {
+				if toolContent.String() == "" {
+					t.Fatalf("expected non-empty tool content; body=%s", string(gotBody))
+				}
+				relay := gjson.GetBytes(gotBody, "messages.2")
+				if relay.Get("role").String() != "user" {
+					t.Fatalf("expected relay user message at messages.2; body=%s", string(gotBody))
+				}
+				if !relay.Get("content").IsArray() {
+					t.Fatalf("expected relay content array; body=%s", string(gotBody))
+				}
 			}
 		})
 	}

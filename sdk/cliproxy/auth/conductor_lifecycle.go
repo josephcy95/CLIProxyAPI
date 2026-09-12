@@ -147,21 +147,56 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	auth.Success = existing.Success
 	auth.Failed = existing.Failed
 	auth.recentRequests = existing.recentRequests
+	if auth.Generation <= existing.Generation {
+		auth.Generation = existing.Generation + 1
+	} else {
+		auth.Generation++
+	}
 	replaceRuntime := auth.ReplaceRuntimeState
+	cooldownStateChanged := false
 	if replaceRuntime {
 		ResetAuthRuntimeForRelogin(auth)
-	} else if !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {
-		auth.ModelStates = mergeModelStatesConservatively(existing.ModelStates, auth.ModelStates, now)
-		if existing.Quota.Exceeded && existing.Quota.Reason == "credential_quota" && existing.Quota.NextRecoverAt.After(now) {
-			auth.Unavailable = existing.Unavailable
-			auth.NextRetryAfter = existing.NextRetryAfter
-			auth.Quota = existing.Quota
-			if auth.Status == StatusActive {
-				auth.Status = existing.Status
+	} else {
+		credChanged := CredentialsChanged(existing, auth)
+		bothActive := !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled
+		if bothActive || credChanged {
+			// Merge states when both sides are active, or when credentials changed so
+			// unauthorized/exhaustion clears can resume models even if previously disabled.
+			auth.ModelStates = mergeModelStatesConservatively(existing.ModelStates, auth.ModelStates, now)
+		}
+		if credChanged {
+			// Fresh tokens invalidate prior unauthorized / exhaustion disablement.
+			if hasUnauthorizedAuthFailure(existing) || existing.Disabled || existing.Status == StatusDisabled || (auth.LastError != nil && isUnauthorizedError(auth.LastError)) {
+				auth.Disabled = false
+				auth.Unavailable = false
+				auth.LastError = nil
+				auth.StatusMessage = ""
+				auth.Status = StatusActive
+				if auth.Metadata != nil {
+					delete(auth.Metadata, "disabled")
+					delete(auth.Metadata, "disabled_reason")
+				}
+			}
+			resumed := clearUnauthorizedModelStates(auth, now)
+			if len(resumed) > 0 {
+				cooldownStateChanged = true
+			}
+		}
+		// Preserve credential_quota across reload/token refresh even when CredentialsChanged
+		// (upstream behavior). Rate limits are account-scoped, not token-string-scoped.
+		if bothActive {
+			if existing.Quota.Exceeded && existing.Quota.Reason == "credential_quota" && existing.Quota.NextRecoverAt.After(now) {
+				auth.Unavailable = existing.Unavailable
+				auth.NextRetryAfter = existing.NextRetryAfter
+				auth.Quota = existing.Quota
+				if auth.Status == StatusActive {
+					auth.Status = existing.Status
+				}
 			}
 		}
 	}
-	cooldownStateChanged := normalizeModelStates(auth)
+	auth.UpdatedAt = now
+	cooldownStateChanged = normalizeModelStates(auth) || cooldownStateChanged
 	if replaceRuntime || m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
 		cooldownStateChanged = clearCooldownStateForAuth(auth, now) || cooldownStateChanged || replaceRuntime
 	}

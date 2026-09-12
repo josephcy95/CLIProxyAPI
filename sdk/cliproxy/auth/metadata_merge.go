@@ -51,6 +51,11 @@ func MergeExistingAuthMetadata(target *Auth, existingMap map[string]any) {
 	if target.Metadata == nil {
 		target.Metadata = make(map[string]any)
 	}
+	if _, explicitlySet := target.Metadata["disabled"]; !explicitlySet {
+		if disabled, ok := existingMap["disabled"].(bool); ok {
+			target.Disabled = disabled
+		}
+	}
 	for k, v := range existingMap {
 		if IsAuthTokenPayloadKey(k) || IsEphemeralAuthMetadataKey(k) {
 			continue
@@ -91,4 +96,22 @@ func ResetAuthRuntimeForRelogin(target *Auth) {
 	if setter, ok := target.Storage.(interface{ SetMetadata(map[string]any) }); ok {
 		setter.SetMetadata(target.Metadata)
 	}
+}
+
+// RestoreOperatorDisablementFromMetadata copies disabled:true from source metadata
+// onto target after ResetAuthRuntimeForRelogin, so Claude legacy credential
+// migration can preserve operator disablement.
+func RestoreOperatorDisablementFromMetadata(target *Auth, source map[string]any) {
+	if target == nil || source == nil {
+		return
+	}
+	disabled, ok := source["disabled"].(bool)
+	if !ok || !disabled {
+		return
+	}
+	target.Disabled = true
+	if target.Metadata == nil {
+		target.Metadata = make(map[string]any)
+	}
+	target.Metadata["disabled"] = true
 }

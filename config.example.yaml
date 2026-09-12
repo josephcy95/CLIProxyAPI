@@ -167,7 +167,7 @@ max-retry-interval: 30
 disable-cooling: false
 
 
-# Cooldown duration in seconds for transient upstream errors (408/500/502/503/504).
+# Cooldown duration in seconds for transient upstream errors (408/500/502/503/504/520-526).
 # Set to 0 to keep the legacy 60-second cooldown; set to -1 to disable transient error cooldowns.
 transient-error-cooldown-seconds: 0
 
@@ -291,7 +291,7 @@ desensitization:
 # to the credential that created them. Default: 3h.
 video-result-auth-cache-ttl: "3h"
 
-# Core auth auto-refresh worker pool size (OAuth/file-based auth token refresh).
+# Core auth auto-refresh and manual refresh-all worker pool size (OAuth/file-based auth token refresh).
 # When > 0, overrides the default worker count (16).
 # auth-auto-refresh-workers: 16
 

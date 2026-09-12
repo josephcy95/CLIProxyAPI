@@ -47,6 +47,10 @@ func GetRequestInfo(ctx context.Context) *RequestInfo {
 type Auth struct {
 	// ID uniquely identifies the auth record across restarts.
 	ID string `json:"id"`
+	// RegistrationEpoch tracks monotonic registration cycles across unregister/re-register.
+	RegistrationEpoch uint64 `json:"registration_epoch,omitempty"`
+	// Generation tracks monotonic mutations to resolve scheduler/reconcile snapshot races.
+	Generation uint64 `json:"generation,omitempty"`
 	// Index is a stable runtime identifier derived from auth metadata (not persisted).
 	Index string `json:"-"`
 	// Provider is the upstream provider key (e.g. "gemini", "claude").
