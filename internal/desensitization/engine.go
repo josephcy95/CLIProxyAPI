@@ -74,10 +74,18 @@ func Current() *Engine {
 	return runtime
 }
 
-// Enabled reports whether masking is active on the current engine.
+// Enabled reports whether the master switch is on (not whether a given request applies).
 func Enabled() bool {
 	e := Current()
 	return e != nil && e.cfg.Enabled
+}
+
+// ShouldMask reports whether this request should be masked given inbound key and selected credential.
+func (e *Engine) ShouldMask(clientAPIKey, provider, authKind string) bool {
+	if e == nil {
+		return false
+	}
+	return e.cfg.Applies(clientAPIKey, provider, authKind)
 }
 
 // NewEngine builds an engine from config without installing it process-wide.

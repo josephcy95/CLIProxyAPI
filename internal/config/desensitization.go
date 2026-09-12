@@ -6,6 +6,14 @@ import "strings"
 type DesensitizationConfig struct {
 	// Enabled turns the feature on. Default false so production is not surprised.
 	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Scope is "all" (global, default) or "targeted" (union of api_keys / oauth_providers / api_providers).
+	Scope string `yaml:"scope" json:"scope"`
+	// APIKeys are inbound client keys (config.api-keys) that trigger masking when Scope is targeted.
+	APIKeys []string `yaml:"api_keys" json:"api_keys"`
+	// OAuthProviders are Auth.Provider ids matched when AuthKind() is oauth (case-insensitive).
+	OAuthProviders []string `yaml:"oauth_providers" json:"oauth_providers"`
+	// APIProviders are Auth.Provider ids matched when AuthKind() is apikey (case-insensitive).
+	APIProviders []string `yaml:"api_providers" json:"api_providers"`
 	// Restore replaces placeholders with originals in responses. Default true.
 	Restore *bool `yaml:"restore,omitempty" json:"restore,omitempty"`
 	// RestoreSecrets also restores API keys / PEM / tokens / JWTs / connstr passwords.
@@ -71,6 +79,10 @@ func DefaultDesensitizationConfig() DesensitizationConfig {
 	off := false
 	return DesensitizationConfig{
 		Enabled:           false,
+		Scope:             DesensitizationScopeAll,
+		APIKeys:           nil,
+		OAuthProviders:    nil,
+		APIProviders:      nil,
 		Restore:           &restore,
 		RestoreSecrets:    &restoreSecrets,
 		FailClosed:        false,
@@ -101,9 +113,23 @@ func DefaultDesensitizationConfig() DesensitizationConfig {
 	}
 }
 
+const (
+	DesensitizationScopeAll      = "all"
+	DesensitizationScopeTargeted = "targeted"
+)
+
 // NormalizeDesensitizationConfig fills omitted fields and clamps values.
 func NormalizeDesensitizationConfig(value DesensitizationConfig) DesensitizationConfig {
 	defaults := DefaultDesensitizationConfig()
+	switch strings.ToLower(strings.TrimSpace(value.Scope)) {
+	case DesensitizationScopeTargeted:
+		value.Scope = DesensitizationScopeTargeted
+	default:
+		value.Scope = DesensitizationScopeAll
+	}
+	value.APIKeys = trimStringSlice(value.APIKeys)
+	value.OAuthProviders = trimStringSlice(value.OAuthProviders)
+	value.APIProviders = trimStringSlice(value.APIProviders)
 	if value.Restore == nil {
 		value.Restore = defaults.Restore
 	}
@@ -298,4 +324,101 @@ func (c DesensitizationConfig) CategoryEnabled(name string) bool {
 	default:
 		return true
 	}
+}
+
+// Applies reports whether masking should run for this inbound key and selected credential.
+// provider/authKind may be empty at BeforeAuth; targeted provider matches then cannot fire.
+func (c DesensitizationConfig) Applies(clientAPIKey, provider, authKind string) bool {
+	n := NormalizeDesensitizationConfig(c)
+	if !n.Enabled {
+		return false
+	}
+	if n.Scope != DesensitizationScopeTargeted {
+		return true
+	}
+	clientAPIKey = strings.TrimSpace(clientAPIKey)
+	if clientAPIKey != "" {
+		for _, key := range n.APIKeys {
+			if clientAPIKey == strings.TrimSpace(key) {
+				return true
+			}
+		}
+	}
+	kind := normalizeDesensitizationAuthKind(authKind)
+	switch kind {
+	case "oauth":
+		return providerMatchesAny(provider, n.OAuthProviders)
+	case "apikey":
+		return providerMatchesAny(provider, n.APIProviders)
+	default:
+		return false
+	}
+}
+
+func normalizeDesensitizationAuthKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "oauth", "oauth2":
+		return "oauth"
+	case "apikey", "api_key", "api-key":
+		return "apikey"
+	default:
+		return strings.ToLower(strings.TrimSpace(kind))
+	}
+}
+
+func providerMatchesAny(provider string, list []string) bool {
+	provider = strings.TrimSpace(provider)
+	if provider == "" || len(list) == 0 {
+		return false
+	}
+	left := providerMatchKeys(provider)
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		right := providerMatchKeys(item)
+		for _, a := range left {
+			for _, b := range right {
+				if strings.EqualFold(a, b) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func providerMatchKeys(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	lower := strings.ToLower(name)
+	out := []string{lower}
+	add := func(v string) {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			return
+		}
+		for _, existing := range out {
+			if existing == v {
+				return
+			}
+		}
+		out = append(out, v)
+	}
+	switch {
+	case strings.HasPrefix(lower, "openai-compatible-"):
+		add(strings.TrimPrefix(lower, "openai-compatible-"))
+		add("openai-compatibility")
+		add("openai")
+	case lower == "openai-compatibility" || lower == "openai":
+		add("openai-compatibility")
+		add("openai")
+	case lower == "gemini-interactions" || lower == "interactions":
+		add("gemini-interactions")
+		add("interactions")
+	}
+	return out
 }

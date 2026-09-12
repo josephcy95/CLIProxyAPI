@@ -467,7 +467,7 @@ func interceptStreamChunk(ctx context.Context, host PluginInterceptorHost, req p
 func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context, handlerType, requestedModel, requestID string, req coreexecutor.Request, opts coreexecutor.Options, skipPluginID string) (coreexecutor.Request, coreexecutor.Options, *interfaces.ErrorMessage) {
 	host := h.interceptorHost()
 	if !requestInterceptorsEnabled(host) {
-		masked := desensitizeMaskPayload(opts.Metadata, requestID, req.Model, requestedModel, handlerType, req.Payload)
+		masked := desensitizeMaskPayload(ctx, opts.Metadata, requestID, req.Model, requestedModel, handlerType, "", "", req.Payload)
 		if len(masked) > 0 && (len(masked) != len(req.Payload) || string(masked) != string(req.Payload)) {
 			req.Payload = masked
 			opts.OriginalRequest = cloneBytes(masked)
@@ -493,7 +493,7 @@ func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context,
 	if resp.Terminate {
 		return req, opts, requestTerminationError(resp)
 	}
-	masked := desensitizeMaskPayload(opts.Metadata, requestID, req.Model, requestedModel, handlerType, req.Payload)
+	masked := desensitizeMaskPayload(ctx, opts.Metadata, requestID, req.Model, requestedModel, handlerType, "", "", req.Payload)
 	if len(masked) > 0 && (len(masked) != len(req.Payload) || string(masked) != string(req.Payload)) {
 		req.Payload = masked
 		opts.OriginalRequest = cloneBytes(masked)
@@ -588,7 +588,7 @@ func (h *BaseAPIHandler) applyRequestInterceptorsAfterAuth(ctx context.Context, 
 	if out.Terminate {
 		return out
 	}
-	masked := desensitizeMaskPayload(req.Metadata, requestID, req.Model, req.RequestedModel, req.SourceFormat.String(), body)
+	masked := desensitizeMaskPayload(ctx, req.Metadata, requestID, req.Model, req.RequestedModel, req.SourceFormat.String(), req.Provider, req.AuthKind, body)
 	if len(masked) > 0 && (len(masked) != len(body) || string(masked) != string(body)) {
 		out.Body = masked
 	} else if len(out.Body) == 0 && desensitizationActive() {

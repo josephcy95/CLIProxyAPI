@@ -100,6 +100,12 @@ type RequestAfterAuthInterceptRequest struct {
 	Body []byte
 	// Metadata is a best-effort cloned context snapshot. Treat it as read-only and JSON-like.
 	Metadata map[string]any
+	// Provider is the selected credential provider key (Auth.Provider). Additive; empty when unknown.
+	Provider string
+	// AuthKind is the selected credential kind ("oauth" or "apikey"). Additive; empty when unknown.
+	AuthKind string
+	// AuthID is the selected credential id. Additive; empty when unknown.
+	AuthID string
 }
 
 // RequestAfterAuthInterceptResponse returns selected-auth request modifications.

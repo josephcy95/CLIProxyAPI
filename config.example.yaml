@@ -222,6 +222,11 @@ qoder:
 # Masks text leaves in outbound JSON as {{TYPE_id}}; restores on inbound when enabled.
 desensitization:
   enabled: false
+  # all = every request (default). targeted = union (OR) of api_keys + oauth_providers + api_providers.
+  scope: all
+  api_keys: []          # inbound client keys from api-keys (exact match after trim)
+  oauth_providers: []   # e.g. claude, codex, gemini, antigravity, qoder
+  api_providers: []     # e.g. claude, gemini, gemini-interactions, my-compat-name
   # Restore placeholders in non-stream + SSE responses (default true).
   restore: true
   # Also restore API keys / PEM / tokens / JWTs / connection strings (default false).

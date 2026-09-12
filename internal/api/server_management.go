@@ -161,6 +161,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/desensitization-config", s.mgmt.GetDesensitizationConfig)
 		mgmt.PUT("/desensitization-config", s.mgmt.PutDesensitizationConfig)
 		mgmt.PATCH("/desensitization-config", s.mgmt.PutDesensitizationConfig)
+		mgmt.GET("/desensitization/scope-options", s.mgmt.GetDesensitizationScopeOptions)
 		mgmt.POST("/desensitization/preview", s.mgmt.PreviewDesensitization)
 		mgmt.GET("/codex-failure-config", s.mgmt.GetCodexFailureConfig)
 		mgmt.PUT("/codex-failure-config", s.mgmt.PutCodexFailureConfig)

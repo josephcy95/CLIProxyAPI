@@ -1,13 +1,20 @@
 package handlers
 
 import (
+	"context"
+
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/desensitization"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	log "github.com/sirupsen/logrus"
 )
 
-func desensitizeMaskPayload(metadata map[string]any, requestID, model, requestedModel, format string, body []byte) []byte {
+func desensitizeMaskPayload(ctx context.Context, metadata map[string]any, requestID, model, requestedModel, format, provider, authKind string, body []byte) []byte {
 	eng := desensitization.Current()
 	if eng == nil || !eng.Config().Enabled || len(body) == 0 {
+		return body
+	}
+	clientKey := helps.APIKeyFromContext(ctx)
+	if !eng.ShouldMask(clientKey, provider, authKind) {
 		return body
 	}
 	sid := desensitization.SessionIDFromMetadata(metadata, requestID)

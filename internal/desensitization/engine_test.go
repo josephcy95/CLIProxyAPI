@@ -156,3 +156,60 @@ func extractToken(s, cat string) string {
 	}
 	return s[start : start+end+2]
 }
+
+func TestShouldMaskScopes(t *testing.T) {
+	disabled := enabledCfg()
+	disabled.Enabled = false
+	if NewEngine(disabled).ShouldMask("k", "claude", "oauth") {
+		t.Fatal("disabled engine should not mask")
+	}
+
+	all := enabledCfg()
+	if !NewEngine(all).ShouldMask("", "", "") {
+		t.Fatal("scope all should mask")
+	}
+
+	empty := enabledCfg()
+	empty.Scope = config.DesensitizationScopeTargeted
+	if NewEngine(empty).ShouldMask("k", "claude", "oauth") {
+		t.Fatal("targeted empty should not mask")
+	}
+
+	keyHit := enabledCfg()
+	keyHit.Scope = config.DesensitizationScopeTargeted
+	keyHit.APIKeys = []string{"client-a"}
+	if !NewEngine(keyHit).ShouldMask("client-a", "", "") {
+		t.Fatal("targeted key hit should mask")
+	}
+	if NewEngine(keyHit).ShouldMask("client-b", "", "") {
+		t.Fatal("targeted key miss should not mask")
+	}
+
+	oauth := enabledCfg()
+	oauth.Scope = config.DesensitizationScopeTargeted
+	oauth.OAuthProviders = []string{"claude"}
+	if !NewEngine(oauth).ShouldMask("", "CLAUDE", "oauth") {
+		t.Fatal("targeted oauth hit should mask")
+	}
+	if NewEngine(oauth).ShouldMask("", "codex", "oauth") {
+		t.Fatal("targeted oauth miss should not mask")
+	}
+
+	api := enabledCfg()
+	api.Scope = config.DesensitizationScopeTargeted
+	api.APIProviders = []string{"gemini"}
+	if !NewEngine(api).ShouldMask("", "gemini", "apikey") {
+		t.Fatal("targeted api-provider hit should mask")
+	}
+	if NewEngine(api).ShouldMask("", "claude", "apikey") {
+		t.Fatal("targeted api-provider miss should not mask")
+	}
+
+	mix := enabledCfg()
+	mix.Scope = config.DesensitizationScopeTargeted
+	mix.APIKeys = []string{"priv"}
+	mix.APIProviders = []string{"xai"}
+	if !NewEngine(mix).ShouldMask("priv", "", "") || !NewEngine(mix).ShouldMask("nope", "xai", "apikey") {
+		t.Fatal("mixture should be OR")
+	}
+}
